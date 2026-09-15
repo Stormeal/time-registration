@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environments and build output
+.venv/
+.tmp/
+.pytest-tmp/
+build/
+dist/
+*.spec
+deployment/
+
+# Editors and operating system
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Local QI Flow runtime data
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+backups/
+logs/

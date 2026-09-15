@@ -23,3 +23,6 @@ class UuidIdentifierGenerator:
 
     def deduction_id(self) -> DeductionId:
         return DeductionId(str(uuid4()))
+
+    def audit_id(self) -> str:
+        return str(uuid4())

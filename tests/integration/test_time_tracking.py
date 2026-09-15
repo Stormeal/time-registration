@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -10,12 +10,19 @@ import pytest
 from qi_flow.application.dto import (
     FinishDeductionCommand,
     FinishWorkCommand,
+    ManualDeductionCommand,
+    ManualWorkSessionCommand,
     StartDeductionCommand,
     StartWorkCommand,
+    UpdateDayDetailsCommand,
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.domain.errors import InvalidIntervalError, RecoveryRequiredError
-from qi_flow.domain.models import DeductionId, DeductionKind, SessionId
+from qi_flow.domain.errors import (
+    InvalidIntervalError,
+    OverlappingIntervalError,
+    RecoveryRequiredError,
+)
+from qi_flow.domain.models import DeductionId, DeductionKind, SessionId, WorkLocation
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 
@@ -40,6 +47,9 @@ class FixedIds:
     def deduction_id(self) -> DeductionId:
         self.deduction_count += 1
         return DeductionId(f"deduction-{self.deduction_count}")
+
+    def audit_id(self) -> str:
+        return f"audit-{self.session_count}-{self.deduction_count}"
 
 
 def build_service(
@@ -138,3 +148,85 @@ def test_start_and_finish_timer_actions_can_be_undone_for_30_seconds(tmp_path: P
     service.finish_work(FinishWorkCommand())
     recovered = service.undo_last_timer_action()
     assert recovered.session_id == SessionId("session-2")
+
+
+def test_manual_entries_are_exact_and_reject_overlap_or_orphan_lunch(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 1, tzinfo=UTC),
+            datetime(2026, 9, 15, 15, 2, tzinfo=UTC),
+        )
+    )
+    lunch = service.add_manual_deduction(
+        ManualDeductionCommand(
+            session.id,
+            DeductionKind.LUNCH,
+            datetime(2026, 9, 15, 11, 59, tzinfo=UTC),
+            datetime(2026, 9, 15, 12, 23, tzinfo=UTC),
+        )
+    )
+    assert lunch.effective_started_at is not None and lunch.effective_started_at.minute == 59
+    with pytest.raises(OverlappingIntervalError):
+        service.add_manual_session(
+            ManualWorkSessionCommand(
+                datetime(2026, 9, 15, 14, 0, tzinfo=UTC),
+                datetime(2026, 9, 15, 16, 0, tzinfo=UTC),
+            )
+        )
+    with pytest.raises(InvalidIntervalError):
+        service.add_manual_deduction(
+            ManualDeductionCommand(
+                session.id,
+                DeductionKind.LUNCH,
+                datetime(2026, 9, 15, 15, 0, tzinfo=UTC),
+                datetime(2026, 9, 15, 15, 30, tzinfo=UTC),
+            )
+        )
+
+
+def test_day_context_persists_multiline_unicode(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, database = build_service(tmp_path, now)
+    service.update_day_details(
+        UpdateDayDetailsCommand(date(2026, 9, 15), WorkLocation.OFFICE, "DSB\nKøbenhavn")
+    )
+    with SQLiteUnitOfWork(database) as uow:
+        details = uow.days.get(date(2026, 9, 15))
+    assert details is not None
+    assert details.location is WorkLocation.OFFICE
+    assert details.note == "DSB\nKøbenhavn"
+
+
+def test_deleted_manual_session_can_be_restored_from_30_day_audit(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC), datetime(2026, 9, 15, 15, 0, tzinfo=UTC)
+        )
+    )
+    service.delete_work_session(session.id)
+    restored = service.restore_work_session(session.id)
+    assert restored.deleted_at is None
+    assert restored.actual_ended_at == datetime(2026, 9, 15, 15, 0, tzinfo=UTC)
+
+
+def test_long_sleep_requires_resolution_and_can_be_excluded_as_break(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    gap = service.detect_sleep_gap(
+        start + timedelta(hours=2), start + timedelta(hours=2, minutes=31)
+    )
+    assert gap is not None
+    with pytest.raises(RecoveryRequiredError):
+        service.finish_work(FinishWorkCommand(start + timedelta(hours=4)))
+    clock.value = start + timedelta(hours=4)
+    service.resolve_sleep_gap("exclude")
+    with SQLiteUnitOfWork(database) as uow:
+        deductions = uow.deductions.list_for_session(SessionId("session-1"))
+    assert len(deductions) == 1
+    assert deductions[0].kind is DeductionKind.SLEEP_BREAK
+    assert deductions[0].source.value == "recovery"

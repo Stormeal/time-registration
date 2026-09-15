@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
 from typing import Self
 
 from qi_flow.application.ports import (
+    AuditRepository,
     DayDetailsRepository,
     DeductionRepository,
     SettingsRepository,
@@ -155,6 +156,12 @@ class SQLiteDeductionRepository:
         ).fetchone()
         return _deduction_from_row(row) if row is not None else None
 
+    def get(self, deduction_id: DeductionId) -> Deduction | None:
+        row = self._connection.execute(
+            "SELECT * FROM deductions WHERE id=?", (deduction_id,)
+        ).fetchone()
+        return _deduction_from_row(row) if row is not None else None
+
     def save(self, deduction: Deduction) -> None:
         self._connection.execute(
             """UPDATE deductions SET session_id=?, kind=?, actual_started_at_utc=?,
@@ -239,6 +246,44 @@ class SQLiteSettingsRepository:
         )
 
 
+class SQLiteAuditRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def record(
+        self,
+        audit_id: str,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        before_state: dict[str, object],
+        created_at: datetime,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO audit_entries(
+            id, entity_type, entity_id, action, before_state_json, created_at_utc, expires_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                audit_id,
+                entity_type,
+                entity_id,
+                action,
+                json.dumps(before_state),
+                _stamp(created_at),
+                _stamp(created_at + timedelta(days=30)),
+            ),
+        )
+
+    def latest(self, entity_type: str, entity_id: str) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT before_state_json FROM audit_entries
+            WHERE entity_type=? AND entity_id=? AND expires_at_utc > CURRENT_TIMESTAMP
+            ORDER BY created_at_utc DESC LIMIT 1""",
+            (entity_type, entity_id),
+        ).fetchone()
+        return json.loads(row["before_state_json"]) if row is not None else None
+
+
 class SQLiteUnitOfWork:
     """A short-lived, explicit SQLite transaction exposing repository adapters."""
 
@@ -246,6 +291,7 @@ class SQLiteUnitOfWork:
     deductions: DeductionRepository
     days: DayDetailsRepository
     settings: SettingsRepository
+    audit: AuditRepository
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self._database = database
@@ -258,6 +304,7 @@ class SQLiteUnitOfWork:
         self.deductions = SQLiteDeductionRepository(self._connection)
         self.days = SQLiteDayDetailsRepository(self._connection)
         self.settings = SQLiteSettingsRepository(self._connection)
+        self.audit = SQLiteAuditRepository(self._connection)
         return self
 
     def __exit__(

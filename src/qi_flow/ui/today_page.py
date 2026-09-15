@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -23,11 +26,13 @@ from qi_flow.application.dto import (
     FinishWorkCommand,
     StartDeductionCommand,
     StartWorkCommand,
+    UpdateDayDetailsCommand,
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
-from qi_flow.domain.models import DeductionKind
+from qi_flow.domain.models import DeductionKind, WorkLocation
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
 
 def _duration(seconds: int) -> str:
@@ -42,6 +47,8 @@ class TodayPage(QWidget):
     def __init__(self, service: TimeTrackingApplicationService) -> None:
         super().__init__()
         self._service = service
+        self._last_awake_at = datetime.now(UTC)
+        self._sleep_deferred = False
         self._heading = QLabel("Today")
         self._heading.setObjectName("todayHeading")
         font = self._heading.font()
@@ -63,19 +70,36 @@ class TodayPage(QWidget):
         self._finish_work.setObjectName("finishWorkButton")
         self._undo = QPushButton("Undo last timer action")
         self._undo.setObjectName("undoTimerButton")
+        self._add_entry = QPushButton("Add entry")
+        self._add_entry.setObjectName("addEntryButton")
         self._rounding = QComboBox()
         self._rounding.setObjectName("roundingCombo")
         for minutes in (1, 5, 10, 15):
             self._rounding.addItem(f"{minutes} minutes", minutes)
         self._rounding.setCurrentIndex((1, 5, 10, 15).index(service.rounding_minutes))
+        self._sleep_enabled = QCheckBox("Detect long Windows sleep")
+        self._sleep_enabled.setChecked(service.sleep_detection_enabled())
+        self._sleep_threshold = QSpinBox()
+        self._sleep_threshold.setRange(1, 240)
+        self._sleep_threshold.setSuffix(" minutes")
+        self._sleep_threshold.setValue(service.sleep_threshold_seconds() // 60)
 
         actions = QHBoxLayout()
         actions.addWidget(self._start_work)
         actions.addWidget(self._lunch)
         actions.addWidget(self._finish_work)
         actions.addWidget(self._undo)
+        actions.addWidget(self._add_entry)
         form = QFormLayout()
         form.addRow("Round completed intervals to", self._rounding)
+        form.addRow(self._sleep_enabled, self._sleep_threshold)
+        self._office = QCheckBox("Worked from office")
+        self._note = QTextEdit()
+        self._note.setPlaceholderText("Daily note")
+        self._save_context = QPushButton("Save daily context")
+        form.addRow(self._office)
+        form.addRow("Note", self._note)
+        form.addRow(self._save_context)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 32, 32, 32)
         layout.addWidget(self._heading)
@@ -89,18 +113,28 @@ class TodayPage(QWidget):
         self._lunch.clicked.connect(self._toggle_lunch)
         self._finish_work.clicked.connect(self._finish)
         self._undo.clicked.connect(self._undo_last_action)
+        self._add_entry.clicked.connect(self._add_manual_entry)
+        self._save_context.clicked.connect(self._save_day_context)
+        self._sleep_enabled.toggled.connect(self._save_sleep_settings)
+        self._sleep_threshold.valueChanged.connect(self._save_sleep_settings)
         self._rounding.currentIndexChanged.connect(self._set_rounding)
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(1000)
         self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.timeout.connect(self._check_sleep_gap)
         self._refresh_timer.start()
         self.refresh()
+        self._load_day_context()
         self._show_recovery_if_needed()
+        self._show_sleep_resolution_if_needed()
 
     def refresh(self) -> None:
         """Refresh display from persisted state, so restart and crash recovery match UI."""
         state = self._service.active_state()
-        blocked = self._service.recovery_state() is not None
+        blocked = (
+            self._service.recovery_state() is not None
+            or self._service.pending_sleep_gap() is not None
+        )
         self._timer.setText(_duration(state.net_seconds))
         self._undo.setEnabled(self._service.can_undo_timer_action())
         if state.session_id is None:
@@ -139,6 +173,66 @@ class TodayPage(QWidget):
 
     def _undo_last_action(self) -> None:
         self._run(self._service.undo_last_timer_action)
+
+    def _add_manual_entry(self) -> None:
+        dialog = ManualEntryDialog(self._service)
+        dialog.exec()
+        self.refresh()
+
+    def _load_day_context(self) -> None:
+        work_date = self._service.active_state().actual_started_at
+        date_to_load = (
+            work_date.astimezone(COPENHAGEN).date()
+            if work_date
+            else datetime.now(COPENHAGEN).date()
+        )
+        details = self._service.day_details(date_to_load)
+        if details is not None:
+            self._office.setChecked(details.location is WorkLocation.OFFICE)
+            self._note.setPlainText(details.note)
+
+    def _save_day_context(self) -> None:
+        work_date = self._service.active_state().actual_started_at
+        date_to_save = (
+            work_date.astimezone(COPENHAGEN).date()
+            if work_date
+            else datetime.now(COPENHAGEN).date()
+        )
+        location = WorkLocation.OFFICE if self._office.isChecked() else WorkLocation.REMOTE
+        self._service.update_day_details(
+            UpdateDayDetailsCommand(date_to_save, location, self._note.toPlainText())
+        )
+
+    def _save_sleep_settings(self) -> None:
+        self._service.set_sleep_detection(
+            self._sleep_enabled.isChecked(), self._sleep_threshold.value()
+        )
+
+    def _check_sleep_gap(self) -> None:
+        now = datetime.now(UTC)
+        gap = self._service.detect_sleep_gap(self._last_awake_at, now)
+        self._last_awake_at = now
+        if gap is not None:
+            self._sleep_deferred = False
+            self._show_sleep_resolution_if_needed()
+
+    def _show_sleep_resolution_if_needed(self) -> None:
+        if self._sleep_deferred or self._service.pending_sleep_gap() is None:
+            return
+        message = QMessageBox(self)
+        message.setWindowTitle("Resolve detected sleep")
+        message.setText("QI Flow detected a long Windows sleep interval. How should it count?")
+        include = message.addButton("Include as work", QMessageBox.ButtonRole.AcceptRole)
+        exclude = message.addButton("Exclude as break", QMessageBox.ButtonRole.DestructiveRole)
+        decide_later = message.addButton("Decide later", QMessageBox.ButtonRole.RejectRole)
+        message.exec()
+        if message.clickedButton() is include:
+            self._service.resolve_sleep_gap("include")
+        elif message.clickedButton() is exclude:
+            self._service.resolve_sleep_gap("exclude")
+        elif message.clickedButton() is decide_later:
+            self._sleep_deferred = True
+        self.refresh()
 
     def _set_rounding(self) -> None:
         self._service.set_rounding_minutes(int(self._rounding.currentData()))

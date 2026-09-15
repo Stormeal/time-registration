@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from qi_flow.domain.models import DeductionKind, SessionId, WorkLocation
+from qi_flow.domain.models import DeductionId, DeductionKind, SessionId, WorkLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,34 @@ class UpdateDayDetailsCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ManualWorkSessionCommand:
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ManualDeductionCommand:
+    session_id: SessionId
+    kind: DeductionKind
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateWorkSessionCommand:
+    session_id: SessionId
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateDeductionCommand:
+    deduction_id: DeductionId
+    started_at: datetime
+    ended_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ActiveStateView:
     session_id: SessionId | None
     actual_started_at: datetime | None
@@ -50,6 +78,13 @@ class RecoveryView:
     session_id: SessionId
     actual_started_at: datetime
     has_active_deduction: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SleepGapView:
+    session_id: SessionId
+    started_at: datetime
+    ended_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

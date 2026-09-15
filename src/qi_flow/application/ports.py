@@ -22,6 +22,8 @@ class IdentifierGenerator(Protocol):
 
     def deduction_id(self) -> DeductionId: ...
 
+    def audit_id(self) -> str: ...
+
 
 class WorkSessionRepository(Protocol):
     def add(self, session: WorkSession) -> None: ...
@@ -44,6 +46,8 @@ class DeductionRepository(Protocol):
 
     def list_for_session(self, session_id: SessionId) -> list[Deduction]: ...
 
+    def get(self, deduction_id: DeductionId) -> Deduction | None: ...
+
 
 class DayDetailsRepository(Protocol):
     def get(self, work_date: date) -> DayDetails | None: ...
@@ -57,6 +61,20 @@ class SettingsRepository(Protocol):
     def save(self, key: str, value: Any, updated_at: datetime) -> None: ...
 
 
+class AuditRepository(Protocol):
+    def record(
+        self,
+        audit_id: str,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        before_state: dict[str, Any],
+        created_at: datetime,
+    ) -> None: ...
+
+    def latest(self, entity_type: str, entity_id: str) -> dict[str, Any] | None: ...
+
+
 class UnitOfWork(Protocol):
     """Atomic persistence boundary for one application operation."""
 
@@ -64,6 +82,7 @@ class UnitOfWork(Protocol):
     deductions: DeductionRepository
     days: DayDetailsRepository
     settings: SettingsRepository
+    audit: AuditRepository
 
     def __enter__(self) -> Self: ...
 

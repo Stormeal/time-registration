@@ -13,6 +13,7 @@ from qi_flow.application.ports import (
     DayDetailsRepository,
     DeductionRepository,
     SettingsRepository,
+    WeeklyTargetRepository,
     WorkSessionRepository,
 )
 from qi_flow.domain.models import (
@@ -21,7 +22,9 @@ from qi_flow.domain.models import (
     DeductionId,
     DeductionKind,
     EntrySource,
+    IsoWeek,
     SessionId,
+    WeeklyTarget,
     WorkLocation,
     WorkSession,
 )
@@ -50,6 +53,7 @@ def _session_from_row(row: sqlite3.Row) -> WorkSession:
         deleted_at=_read_stamp(row["deleted_at_utc"]),
         recovery_acknowledged_at=_read_stamp(row["recovery_acknowledged_at_utc"]),
         rounding_minutes=row["rounding_minutes"],
+        testhuset_task_id=row["testhuset_task_id"],
     )
 
 
@@ -80,8 +84,8 @@ class SQLiteWorkSessionRepository:
             """INSERT INTO work_sessions (
                 id, actual_started_at_utc, actual_ended_at_utc, effective_started_at_utc,
                 effective_ended_at_utc, source, revision, created_at_utc, updated_at_utc,
-                deleted_at_utc, recovery_acknowledged_at_utc, rounding_minutes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                deleted_at_utc, recovery_acknowledged_at_utc, rounding_minutes, testhuset_task_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             self._values(session),
         )
 
@@ -103,7 +107,7 @@ class SQLiteWorkSessionRepository:
             """UPDATE work_sessions SET actual_started_at_utc=?, actual_ended_at_utc=?,
             effective_started_at_utc=?, effective_ended_at_utc=?, source=?, revision=?,
             created_at_utc=?, updated_at_utc=?, deleted_at_utc=?, recovery_acknowledged_at_utc=?,
-            rounding_minutes=?
+            rounding_minutes=?, testhuset_task_id=?
             WHERE id=?""",
             (*self._values(session)[1:], session.id),
         )
@@ -132,6 +136,7 @@ class SQLiteWorkSessionRepository:
             _stamp(session.deleted_at),
             _stamp(session.recovery_acknowledged_at),
             session.rounding_minutes,
+            session.testhuset_task_id,
         )
 
 
@@ -284,6 +289,27 @@ class SQLiteAuditRepository:
         return json.loads(row["before_state_json"]) if row is not None else None
 
 
+class SQLiteWeeklyTargetRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get(self, iso_week: IsoWeek) -> WeeklyTarget | None:
+        row = self._connection.execute(
+            "SELECT target_minutes FROM weekly_targets WHERE iso_year=? AND iso_week=?",
+            (iso_week.year, iso_week.week),
+        ).fetchone()
+        return WeeklyTarget(iso_week, row["target_minutes"]) if row is not None else None
+
+    def save(self, target: WeeklyTarget, updated_at: datetime) -> None:
+        self._connection.execute(
+            """INSERT INTO weekly_targets(iso_year, iso_week, target_minutes, updated_at_utc)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(iso_year, iso_week) DO UPDATE SET target_minutes=excluded.target_minutes,
+            updated_at_utc=excluded.updated_at_utc""",
+            (target.iso_week.year, target.iso_week.week, target.target_minutes, _stamp(updated_at)),
+        )
+
+
 class SQLiteUnitOfWork:
     """A short-lived, explicit SQLite transaction exposing repository adapters."""
 
@@ -292,6 +318,7 @@ class SQLiteUnitOfWork:
     days: DayDetailsRepository
     settings: SettingsRepository
     audit: AuditRepository
+    weekly_targets: WeeklyTargetRepository
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self._database = database
@@ -305,6 +332,7 @@ class SQLiteUnitOfWork:
         self.days = SQLiteDayDetailsRepository(self._connection)
         self.settings = SQLiteSettingsRepository(self._connection)
         self.audit = SQLiteAuditRepository(self._connection)
+        self.weekly_targets = SQLiteWeeklyTargetRepository(self._connection)
         return self
 
     def __exit__(

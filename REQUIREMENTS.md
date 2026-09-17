@@ -46,11 +46,19 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Not started |
 | R24 | Support optional Windows startup, single-instance behavior, a compact tray panel, and recovery-focused startup behavior. | Not started |
 | R25 | Provide configurable work and lunch reminders, defaulting to 9 elapsed hours and 45 lunch minutes, with user-selected snooze. | Not started |
-| R26 | Create daily SQLite backups, retain 30, support a selectable backup folder and guided restoration, and never replace an unreadable database silently. | Not started |
+| R26 | Create daily SQLite backups, retain 30, support a selectable backup folder and guided restoration, and never replace an unreadable database silently. | In progress |
 | R27 | Use a 37-hour default weekly target with per-week overrides and neutral remaining/over-target feedback. | Not started |
 | R28 | Use English UI text with Danish formats, ISO Monday–Sunday weeks, Europe/Copenhagen time, and correct daylight-saving elapsed-time calculations. | Not started |
-| R29 | Export summary and detailed UTF-8 semicolon-separated CSV for a week, month, or all history, using Danish decimal commas. | Not started |
-| R30 | Install per Windows user without administrator rights, retain data indefinitely, keep limited privacy-safe local diagnostics, and include no telemetry or automatic updater in iteration 1. | Not started |
+| R29 | Export summary and detailed UTF-8 semicolon-separated CSV for a week, month, or all history, using Danish decimal commas. | Complete |
+| R30 | Install per Windows user without administrator rights, retain data indefinitely, keep limited privacy-safe local diagnostics, and include no telemetry or automatic updater in iteration 1. | In progress |
+| R31 | Allow completed work sessions and lunch/break deductions to be corrected from Timesheet using exact manual times, while preserving validation and 30-day recovery history. | Complete |
+| R32 | Provide concise English hover help for each configurable Today option, including explicit non-destructive sleep-detection behavior. | Complete |
+| R33 | Use a consistent, modern teal QI Flow icon in the app, tray, packaged executable, Start menu, and installer. | Complete |
+| R34 | Testhuset authentication is user-managed by default. A user may opt in to save a sign-in in Windows Credential Manager for their Windows account; QI Flow never writes it to its files, backups, exports, or logs, and never stores cookies or session tokens. | Complete |
+| R35 | Let a user scan Testhuset weekly-sheet project/task rows through a temporary authenticated browser session and cache only display names and stable task identifiers locally. | Complete |
+| R36 | Let each user choose a default Testhuset task and apply per-session overrides from the latest scanned task list. | Complete |
+| R37 | Preview and explicitly confirm Testhuset weekly timesheet fills, write two-decimal period-separated hours, resolve differing existing values per slot, verify saves, and leave week closure manual. | Complete |
+| R38 | Show each Timesheet day’s rounded net duration as period-separated decimal hours for Testhuset review. | Complete |
 
 ### Example calculation
 
@@ -123,3 +131,16 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
 - 2026-09-15: v0.4 resolves tray closing, continuous work sessions with separately deducted lunch, and monthly grouping by calendar week number.
 - 2026-09-15: v0.5 records the completed design interview in `DECISIONS.md` and adds the approved iteration 1 behaviors R20–R30. User stories drafted; development not started.
 - Future sessions: read this file and `DESIGN.md` first; update decisions and statuses explicitly. Do not infer approval from the existence of these documents.
+
+## Epic I delivery — 17/09/2026
+
+US25–US27 are implemented as an authorized post-iteration-1 integration. The app opens a
+temporary Edge session for direct user login, scans task names/IDs, supports default and
+per-session assignment, previews daily decimal hours, requires conflict choices and explicit
+fill confirmation, and verifies each save response. Week closure remains manual.
+
+This supersedes the earlier Testhuset deferral only for the confirmed Epic I scope. Google
+Sheets, SAP and final workplace submission remain outside this change. Testhuset sign-ins can be
+saved only through the user’s opt-in Windows Credential Manager setting.
+Automated tests verify the browser contract with isolated fixtures. Live navigation and page
+structure were inspected read-only; a first real fill remains a release smoke check.

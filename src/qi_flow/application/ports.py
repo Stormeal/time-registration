@@ -6,7 +6,15 @@ from datetime import date, datetime
 from types import TracebackType
 from typing import Any, Protocol, Self
 
-from qi_flow.domain.models import DayDetails, Deduction, DeductionId, SessionId, WorkSession
+from qi_flow.domain.models import (
+    DayDetails,
+    Deduction,
+    DeductionId,
+    IsoWeek,
+    SessionId,
+    WeeklyTarget,
+    WorkSession,
+)
 
 
 class Clock(Protocol):
@@ -75,6 +83,12 @@ class AuditRepository(Protocol):
     def latest(self, entity_type: str, entity_id: str) -> dict[str, Any] | None: ...
 
 
+class WeeklyTargetRepository(Protocol):
+    def get(self, iso_week: IsoWeek) -> WeeklyTarget | None: ...
+
+    def save(self, target: WeeklyTarget, updated_at: datetime) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """Atomic persistence boundary for one application operation."""
 
@@ -83,6 +97,7 @@ class UnitOfWork(Protocol):
     days: DayDetailsRepository
     settings: SettingsRepository
     audit: AuditRepository
+    weekly_targets: WeeklyTargetRepository
 
     def __enter__(self) -> Self: ...
 

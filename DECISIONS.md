@@ -92,6 +92,15 @@ This file records the shared understanding reached during the design interview. 
 | D071 | Follow the Windows light/dark setting by default, with Light and Dark overrides. Retain the restrained teal visual direction and create a simple QI app/tray icon. |
 | D072 | First launch presents one compact setup screen with defaults: 5-minute rounding, 37-hour target, startup disabled, 9-hour and 45-minute reminders enabled, 30-minute sleep prompt enabled, System theme, and 30 daily backups. |
 | D073 | Global keyboard shortcuts are outside iteration 1. |
+| D090 | Testhuset login is performed directly by the user in a temporary Playwright browser session. QI Flow never persists credentials, browser cookies, or tokens; diagnostic logs exclude authentication and time-entry contents. |
+| D091 | Testhuset task scanning follows Dashboard → Timer, km & udlæg → Ugeseddel for the selected ISO week. It refreshes a JSON cache of project/task display names and stable page identifiers without writing hours. |
+| D092 | No Testhuset task is preconfigured. Each user chooses a default from a successful scan; completed sessions may override it. |
+| D093 | Testhuset fill values use exactly two decimal places with a period. Existing comma values are read as decimals; ambiguous multi-period values are rejected. Different values require a per-slot keep-or-replace choice. |
+| D094 | QI Flow shows and explicitly confirms a Testhuset fill preview, verifies each page save response, and does not automate irreversible week closure. |
+| D095 | Epic I is authorized as a post-iteration-1 integration on 2026-09-17. D003 continues to defer Google and SAP, but no longer defers the US25–US27 Testhuset scope. |
+| D096 | Session overrides are stable Testhuset task/project row IDs. Sessions without overrides resolve the current default when previewing, including historical sessions. Assignment changes preserve timestamps and participate in the existing 30-day recovery history. |
+| D097 | Every differing slot, including blank/zero, requires an explicit keep-or-replace choice. Task/day net seconds are summed before decimal rounding (nearest hundredth, half up). Only previewed slots are written; unrelated destination values remain untouched. |
+| D098 | Testhuset browser failures stop immediately without blind retries or rollback writes. Reopen a fresh preview to reconcile partial saves. Temporary non-persistent Edge contexts are closed on success, cancellation and handled failure. |
 
 ## Completion standard
 
@@ -103,3 +112,5 @@ This file records the shared understanding reached during the design interview. 
 ## Change log
 
 - 2026-09-15: v1.0 confirmed after four design-interview rounds and explicit shared-understanding confirmation.
+- 2026-09-17: Epic I implementation authorized. User-managed browser login (D090) takes precedence
+  over collecting credentials in QI Flow. Live weekly-sheet structure inspected without hour writes.

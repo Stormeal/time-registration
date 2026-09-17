@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import cast
 
-from PySide6.QtCore import QDateTime
+from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
     QComboBox,
-    QDateTimeEdit,
+    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QMessageBox,
+    QStackedWidget,
+    QTimeEdit,
 )
 
 from qi_flow.application.dto import ManualDeductionCommand, ManualWorkSessionCommand
@@ -25,7 +27,9 @@ from qi_flow.domain.time_rules import COPENHAGEN
 class ManualEntryDialog(QDialog):
     """Collect a completed exact-minute interval; close confirms unsaved discard."""
 
-    def __init__(self, service: TimeTrackingApplicationService) -> None:
+    def __init__(
+        self, service: TimeTrackingApplicationService, work_date: date | None = None
+    ) -> None:
         super().__init__()
         self._service = service
         self.setWindowTitle("Add time entry")
@@ -34,17 +38,24 @@ class ManualEntryDialog(QDialog):
         self._kind.addItem("Lunch", DeductionKind.LUNCH.value)
         self._kind.addItem("Sleep break", DeductionKind.SLEEP_BREAK.value)
         self._parent = QComboBox()
-        self._start = QDateTimeEdit(QDateTime.currentDateTime())
-        self._end = QDateTimeEdit(QDateTime.currentDateTime())
+        initial = work_date or datetime.now(COPENHAGEN).date()
+        current_time = datetime.now(COPENHAGEN).time().replace(second=0, microsecond=0)
+        self._date = QDateEdit(QDate(initial.year, initial.month, initial.day))
+        self._start = QTimeEdit(QTime(current_time.hour, current_time.minute))
+        self._end = QTimeEdit(QTime(current_time.hour, current_time.minute))
+        self._date.setDisplayFormat("dd/MM/yyyy")
+        self._date.setCalendarPopup(True)
         for editor in (self._start, self._end):
-            editor.setDisplayFormat("dd/MM/yyyy HH:mm")
-            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("HH:mm")
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         layout = QFormLayout(self)
         layout.addRow("Type", self._kind)
-        layout.addRow("Work session", self._parent)
+        self._work_session = QStackedWidget()
+        self._work_session.addWidget(self._date)
+        self._work_session.addWidget(self._parent)
+        layout.addRow("Work session", self._work_session)
         layout.addRow("Start", self._start)
         layout.addRow("End", self._end)
         layout.addRow(self._buttons)
@@ -59,17 +70,20 @@ class ManualEntryDialog(QDialog):
             if session.actual_ended_at is None:
                 continue
             label = (
-                f"{session.actual_started_at.astimezone(COPENHAGEN):%d/%m %H:%M}"
+                f"Work session: {session.actual_started_at.astimezone(COPENHAGEN):%d/%m/%Y} "
+                f"{session.actual_started_at.astimezone(COPENHAGEN):%H:%M}"
                 f" - {session.actual_ended_at.astimezone(COPENHAGEN):%H:%M}"
             )
             self._parent.addItem(label, str(session.id))
 
     def _update_parent_visibility(self) -> None:
-        self._parent.setVisible(self._kind.currentData() != "work")
+        self._work_session.setCurrentWidget(
+            self._date if self._kind.currentData() == "work" else self._parent
+        )
 
     def _save(self) -> None:
-        start = self._as_copenhagen(self._start.dateTime())
-        end = self._as_copenhagen(self._end.dateTime())
+        start = self._as_copenhagen(self._date.date(), self._start.time())
+        end = self._as_copenhagen(self._date.date(), self._end.time())
         try:
             kind = self._kind.currentData()
             if kind == "work":
@@ -89,5 +103,7 @@ class ManualEntryDialog(QDialog):
         self.accept()
 
     @staticmethod
-    def _as_copenhagen(value: QDateTime) -> datetime:
-        return cast(datetime, value.toPython()).replace(tzinfo=COPENHAGEN)
+    def _as_copenhagen(work_date: QDate, work_time: QTime) -> datetime:
+        return datetime.combine(
+            cast(date, work_date.toPython()), cast(time, work_time.toPython()), tzinfo=COPENHAGEN
+        )

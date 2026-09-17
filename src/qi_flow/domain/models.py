@@ -57,6 +57,8 @@ class WorkSession:
     rounding_minutes: int = 5
     revision: int = 1
 
+    testhuset_task_id: str | None = None
+
     def __post_init__(self) -> None:
         for field_name in (
             "actual_started_at",

@@ -18,6 +18,7 @@ build/
 dist/
 *.spec
 deployment/
+.playwright-mcp/
 
 # Editors and operating system
 .idea/
@@ -32,3 +33,5 @@ Desktop.ini
 *.sqlite3-wal
 backups/
 logs/
+testhuset-projects.json
+testhuset-projects.tmp

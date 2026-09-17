@@ -39,19 +39,30 @@ src/qi_flow/
   domain/
     models.py                 entities and value objects
     errors.py                 domain-facing failures
+    time_rules.py             rounding, net-time, and midnight-split calculations
   application/
     dto.py                    immutable input/output records
     ports.py                  repositories, unit of work, clock, identifiers
-    services.py               use-case boundary for future implementation
+    services.py               use-case boundary (TimeTrackingService protocol)
+    time_tracking.py          TimeTrackingApplicationService implementation
   infrastructure/
     paths.py                  per-user Windows paths
     logging.py                privacy-safe rotating diagnostics
+    system.py                 system clock and UUID identifier generators
+    startup.py                optional "Start with Windows" registry adapter
+    single_instance.py        QLocalServer/QLocalSocket single-instance guard
     sqlite/
       database.py             connections, transactions, migration runner
+      repositories.py         SQLite adapters for every application port
       migrations/             ordered, immutable SQL migrations
   ui/
     main_window.py            application shell and navigation
-    tray.py                   tray lifecycle adapter
+    today_page.py             Today screen (P0 timer flow)
+    manual_entry_dialog.py    explicit-save manual entry form
+    tray.py                   tray icon, context menu, lifecycle adapter
+    tray_panel.py             compact left-click tray popover
+    exit_dialog.py            Close app confirmation (US10)
+    formatting.py             shared display-formatting helpers
 tests/
   unit/                       pure domain/application tests
   integration/                SQLite adapter and migration tests
@@ -122,6 +133,35 @@ code should be introduced in iteration 1 modules behind inactive flags.
 
 ## Handoff checklist
 
+### Epic I adapter (2026-09-17)
+
+Epic I is a separately authorized post-iteration-1 addition. `application/testhuset.py` defines
+the task-cache and weekly-sheet ports, assignment use cases, allocation, preview and reconciliation.
+`domain/testhuset.py` owns task identities and strict decimal-hour parsing/formatting. These modules
+remain runnable without Qt or Playwright. Migration 0004 adds a nullable session task override;
+the current default uses the existing settings repository and overrides use session audit history.
+
+`infrastructure/testhuset_cache.py` atomically replaces an allowlisted JSON task cache.
+`infrastructure/testhuset_browser.py` implements the inspected `weeksheet2.aspx` UI contract with
+a non-persistent visible Edge context. The opt-in `WindowsCredentialStore` uses the current Windows
+user's Credential Manager entry and is injected at the composition root; it is never part of QI
+Flow's data directory, database, backups, exports or logs. The adapter opens `weeksheet2.aspx`
+directly before scanning, expands project rows, validates
+the date/task field identity and verifies `/ajaxupdatetime` responses (`d` success code `1` plus
+the returned accepted value). There is deliberately no close-week port or adapter action.
+
+The composition root injects the service and temporary-browser factory into the UI. A dedicated
+Qt worker owns every Playwright object throughout one scan/fill. The main thread handles the
+preview and choices; an event releases the worker only after explicit confirmation. Cancellation
+keeps the dialog alive until browser cleanup completes. Exceptions from Playwright are sanitized;
+credentials, cookies, page snapshots and request contents are never logged or persisted.
+
+The adapter reloads the server sheet before confirmation reconciliation. Because the destination
+does not offer UI-level atomic compare-and-set, simultaneous external edits remain a limitation.
+Browser integration tests intercept all page requests and exercise the DOM/save contract in Edge.
+
+### Before implementation
+
 Before implementing a story:
 
 1. Read `REQUIREMENTS.md`, `DECISIONS.md`, and the story acceptance criteria.
@@ -130,4 +170,3 @@ Before implementing a story:
    handling/rendering in `ui`.
 4. Add the smallest meaningful tests at the layer that owns the behavior.
 5. Run `scripts/check.ps1` and update story status only after acceptance criteria pass.
-

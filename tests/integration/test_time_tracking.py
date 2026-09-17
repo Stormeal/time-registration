@@ -12,6 +12,7 @@ from qi_flow.application.dto import (
     FinishWorkCommand,
     ManualDeductionCommand,
     ManualWorkSessionCommand,
+    ReminderSettingsView,
     StartDeductionCommand,
     StartWorkCommand,
     UpdateDayDetailsCommand,
@@ -22,7 +23,7 @@ from qi_flow.domain.errors import (
     OverlappingIntervalError,
     RecoveryRequiredError,
 )
-from qi_flow.domain.models import DeductionId, DeductionKind, SessionId, WorkLocation
+from qi_flow.domain.models import DeductionId, DeductionKind, IsoWeek, SessionId, WorkLocation
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 
@@ -230,3 +231,43 @@ def test_long_sleep_requires_resolution_and_can_be_excluded_as_break(tmp_path: P
     assert len(deductions) == 1
     assert deductions[0].kind is DeductionKind.SLEEP_BREAK
     assert deductions[0].source.value == "recovery"
+
+
+def test_month_and_weekly_totals_allocate_cross_midnight_work(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 21, 30, tzinfo=UTC),
+            datetime(2026, 9, 16, 1, 30, tzinfo=UTC),
+        )
+    )
+
+    summaries = {summary.work_date: summary for summary in service.month(2026, 9)}
+    assert len(summaries) == 30
+    assert summaries[date(2026, 9, 15)].net_seconds == 30 * 60
+    assert summaries[date(2026, 9, 16)].net_seconds == 3 * 60 * 60 + 30 * 60
+    week = IsoWeek(2026, 38)
+    progress = service.set_weekly_target(week, 37 * 60)
+    assert progress.logged_seconds == 4 * 60 * 60
+    assert progress.target_minutes == 37 * 60
+
+
+def test_work_and_lunch_reminders_are_configurable_and_snoozable(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    assert service.reminder_settings() == ReminderSettingsView(True, 9 * 60, True, 45)
+    service.set_reminder_settings(ReminderSettingsView(True, 60, True, 15))
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(hours=1)
+    assert [reminder.kind for reminder in service.due_reminders()] == ["work"]
+    assert service.due_reminders() == []
+    service.snooze_reminder("work", 15)
+    clock.value += timedelta(minutes=10)
+    assert service.due_reminders() == []
+    clock.value += timedelta(minutes=6)
+    assert [reminder.kind for reminder in service.due_reminders()] == ["work"]
+
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=15)
+    assert [reminder.kind for reminder in service.due_reminders()] == ["lunch"]

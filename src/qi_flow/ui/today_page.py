@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from qi_flow.application.dto import (
     FinishDeductionCommand,
     FinishWorkCommand,
+    ReminderSettingsView,
     StartDeductionCommand,
     StartWorkCommand,
     UpdateDayDetailsCommand,
@@ -32,13 +33,8 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import DeductionKind, WorkLocation
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.formatting import format_duration
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
-
-
-def _duration(seconds: int) -> str:
-    hours, remainder = divmod(max(0, seconds), 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 
 class TodayPage(QWidget):
@@ -77,12 +73,40 @@ class TodayPage(QWidget):
         for minutes in (1, 5, 10, 15):
             self._rounding.addItem(f"{minutes} minutes", minutes)
         self._rounding.setCurrentIndex((1, 5, 10, 15).index(service.rounding_minutes))
+        self._rounding.setToolTip("Rounds future timer-created completed intervals to this value.")
         self._sleep_enabled = QCheckBox("Detect long Windows sleep")
+        self._sleep_enabled.setToolTip(
+            "Prompts you to resolve a Windows sleep gap. QI Flow never removes time automatically."
+        )
         self._sleep_enabled.setChecked(service.sleep_detection_enabled())
         self._sleep_threshold = QSpinBox()
         self._sleep_threshold.setRange(1, 240)
         self._sleep_threshold.setSuffix(" minutes")
         self._sleep_threshold.setValue(service.sleep_threshold_seconds() // 60)
+        self._sleep_threshold.setToolTip(
+            "Prompts for a decision after a sleep gap longer than this."
+        )
+        reminders = service.reminder_settings()
+        self._work_reminder_enabled = QCheckBox("Remind after long work")
+        self._work_reminder_enabled.setToolTip(
+            "Shows a reminder after this much elapsed work time, including lunch."
+        )
+        self._work_reminder_enabled.setChecked(reminders.work_enabled)
+        self._work_reminder_minutes = QSpinBox()
+        self._work_reminder_minutes.setRange(1, 24 * 60)
+        self._work_reminder_minutes.setSuffix(" minutes")
+        self._work_reminder_minutes.setValue(reminders.work_minutes)
+        self._work_reminder_minutes.setToolTip("Sets the elapsed-work reminder threshold.")
+        self._lunch_reminder_enabled = QCheckBox("Remind after long lunch")
+        self._lunch_reminder_enabled.setToolTip(
+            "Shows a reminder when the active lunch reaches this length."
+        )
+        self._lunch_reminder_enabled.setChecked(reminders.lunch_enabled)
+        self._lunch_reminder_minutes = QSpinBox()
+        self._lunch_reminder_minutes.setRange(1, 240)
+        self._lunch_reminder_minutes.setSuffix(" minutes")
+        self._lunch_reminder_minutes.setValue(reminders.lunch_minutes)
+        self._lunch_reminder_minutes.setToolTip("Sets the active-lunch reminder threshold.")
 
         actions = QHBoxLayout()
         actions.addWidget(self._start_work)
@@ -93,7 +117,10 @@ class TodayPage(QWidget):
         form = QFormLayout()
         form.addRow("Round completed intervals to", self._rounding)
         form.addRow(self._sleep_enabled, self._sleep_threshold)
+        form.addRow(self._work_reminder_enabled, self._work_reminder_minutes)
+        form.addRow(self._lunch_reminder_enabled, self._lunch_reminder_minutes)
         self._office = QCheckBox("Worked from office")
+        self._office.setToolTip("Marks today's daily context as office work for timesheet review.")
         self._note = QTextEdit()
         self._note.setPlaceholderText("Daily note")
         self._save_context = QPushButton("Save daily context")
@@ -117,6 +144,10 @@ class TodayPage(QWidget):
         self._save_context.clicked.connect(self._save_day_context)
         self._sleep_enabled.toggled.connect(self._save_sleep_settings)
         self._sleep_threshold.valueChanged.connect(self._save_sleep_settings)
+        self._work_reminder_enabled.toggled.connect(self._save_reminder_settings)
+        self._work_reminder_minutes.valueChanged.connect(self._save_reminder_settings)
+        self._lunch_reminder_enabled.toggled.connect(self._save_reminder_settings)
+        self._lunch_reminder_minutes.valueChanged.connect(self._save_reminder_settings)
         self._rounding.currentIndexChanged.connect(self._set_rounding)
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(1000)
@@ -135,7 +166,7 @@ class TodayPage(QWidget):
             self._service.recovery_state() is not None
             or self._service.pending_sleep_gap() is not None
         )
-        self._timer.setText(_duration(state.net_seconds))
+        self._timer.setText(format_duration(state.net_seconds))
         self._undo.setEnabled(self._service.can_undo_timer_action())
         if state.session_id is None:
             self._status.setText("No work session is running.")
@@ -206,6 +237,16 @@ class TodayPage(QWidget):
     def _save_sleep_settings(self) -> None:
         self._service.set_sleep_detection(
             self._sleep_enabled.isChecked(), self._sleep_threshold.value()
+        )
+
+    def _save_reminder_settings(self) -> None:
+        self._service.set_reminder_settings(
+            ReminderSettingsView(
+                work_enabled=self._work_reminder_enabled.isChecked(),
+                work_minutes=self._work_reminder_minutes.value(),
+                lunch_enabled=self._lunch_reminder_enabled.isChecked(),
+                lunch_minutes=self._lunch_reminder_minutes.value(),
+            )
         )
 
     def _check_sleep_gap(self) -> None:

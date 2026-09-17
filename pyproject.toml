@@ -12,6 +12,8 @@ authors = [{ name = "QI Flow contributors" }]
 dependencies = [
     "PySide6>=6.8,<7",
     "tzdata>=2025.2",
+    "playwright>=1.58,<2",
+    "keyring>=25.6,<26",
 ]
 
 [project.optional-dependencies]

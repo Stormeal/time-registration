@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from qi_flow.domain.models import DeductionId, DeductionKind, SessionId, WorkLocation
+from qi_flow.domain.models import DeductionId, DeductionKind, IsoWeek, SessionId, WorkLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,3 +98,41 @@ class DaySummaryView:
     net_seconds: int
     location: WorkLocation | None
     has_note: bool
+    is_provisional: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyProgressView:
+    iso_week: IsoWeek
+    logged_seconds: int
+    target_minutes: int
+
+    @property
+    def difference_seconds(self) -> int:
+        return self.logged_seconds - self.target_minutes * 60
+
+
+@dataclass(frozen=True, slots=True)
+class ReminderSettingsView:
+    work_enabled: bool
+    work_minutes: int
+    lunch_enabled: bool
+    lunch_minutes: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReminderView:
+    kind: str
+    elapsed_seconds: int
+    net_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class AppPreferencesView:
+    """The compact, local configuration shown during setup and in Settings."""
+
+    rounding_minutes: int
+    weekly_target_minutes: int
+    sleep_enabled: bool
+    sleep_threshold_minutes: int
+    theme: str

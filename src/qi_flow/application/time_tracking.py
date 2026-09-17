@@ -9,18 +9,22 @@ from typing import cast
 
 from qi_flow.application.dto import (
     ActiveStateView,
+    AppPreferencesView,
     DaySummaryView,
     FinishDeductionCommand,
     FinishWorkCommand,
     ManualDeductionCommand,
     ManualWorkSessionCommand,
     RecoveryView,
+    ReminderSettingsView,
+    ReminderView,
     SleepGapView,
     StartDeductionCommand,
     StartWorkCommand,
     UpdateDayDetailsCommand,
     UpdateDeductionCommand,
     UpdateWorkSessionCommand,
+    WeeklyProgressView,
 )
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
 from qi_flow.domain.errors import (
@@ -35,14 +39,18 @@ from qi_flow.domain.models import (
     DeductionId,
     DeductionKind,
     EntrySource,
+    IsoWeek,
     SessionId,
+    WeeklyTarget,
     WorkSession,
 )
 from qi_flow.domain.time_rules import (
+    COPENHAGEN,
     VALID_ROUNDING_MINUTES,
     began_on_previous_local_day,
     effective_interval,
     net_seconds,
+    split_at_local_midnight,
 )
 
 
@@ -51,6 +59,17 @@ class _UndoAction:
     kind: str
     session_id: str
     occurred_at: datetime
+
+
+@dataclass(slots=True)
+class _DayTotal:
+    first_start: datetime | None = None
+    final_finish: datetime | None = None
+    session_count: int = 0
+    lunch_seconds: int = 0
+    break_seconds: int = 0
+    net_seconds: int = 0
+    is_provisional: bool = False
 
 
 class TimeTrackingApplicationService:
@@ -266,6 +285,298 @@ class TimeTrackingApplicationService:
                 datetime(1970, 1, 1, tzinfo=UTC), self._when(None)
             )
         return [session for session in sessions if session.actual_ended_at is not None]
+
+    def completed_sessions_for_day(self, work_date: date) -> list[WorkSession]:
+        """Return completed sessions intersecting a Copenhagen calendar day."""
+        start = datetime.combine(work_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        end = start + timedelta(days=1)
+        with self._uow_factory() as uow:
+            sessions = uow.sessions.list_intersecting(start, end)
+        return [session for session in sessions if session.actual_ended_at is not None]
+
+    def completed_deductions(self, session_id: SessionId) -> list[Deduction]:
+        """Return completed, non-deleted deductions for the correction editor."""
+        with self._uow_factory() as uow:
+            return [
+                deduction
+                for deduction in uow.deductions.list_for_session(session_id)
+                if deduction.actual_ended_at is not None and deduction.deleted_at is None
+            ]
+
+    def month(self, year: int, month: int) -> list[DaySummaryView]:
+        """Summarize every local calendar day in a month using effective timer values."""
+        month_start = date(year, month, 1)
+        month_end = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+        return self._summaries_for_range(month_start, month_end)
+
+    def summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
+        """Return one rounded, local-calendar summary per day in ``[start, end)``."""
+        if end_date <= start_date:
+            raise ValueError("The export end date must be after its start date.")
+        return self._summaries_for_range(start_date, end_date)
+
+    def history_range(self) -> tuple[date, date]:
+        """Find the bounded calendar range used for an all-history export."""
+        sessions = self.completed_sessions()
+        today = self._when(None).astimezone(COPENHAGEN).date()
+        if not sessions:
+            return today, today + timedelta(days=1)
+        starts = [
+            (session.effective_started_at or session.actual_started_at)
+            .astimezone(COPENHAGEN)
+            .date()
+            for session in sessions
+        ]
+        ends = [
+            (session.effective_ended_at or session.actual_ended_at).astimezone(COPENHAGEN).date()
+            for session in sessions
+            if session.actual_ended_at is not None
+        ]
+        return min(starts), max(ends) + timedelta(days=1)
+
+    def weekly_progress(self, iso_week: IsoWeek) -> WeeklyProgressView:
+        monday = date.fromisocalendar(iso_week.year, iso_week.week, 1)
+        summaries = self._summaries_for_range(monday, monday + timedelta(days=7))
+        with self._uow_factory() as uow:
+            saved = uow.weekly_targets.get(iso_week)
+            configured_target = uow.settings.get("default_weekly_target_minutes")
+        target_minutes = (
+            saved.target_minutes
+            if saved is not None
+            else configured_target
+            if isinstance(configured_target, int) and configured_target >= 0
+            else 37 * 60
+        )
+        return WeeklyProgressView(
+            iso_week, sum(summary.net_seconds for summary in summaries), target_minutes
+        )
+
+    def set_weekly_target(self, iso_week: IsoWeek, target_minutes: int) -> WeeklyProgressView:
+        if target_minutes < 0:
+            raise ValueError("Weekly target cannot be negative.")
+        with self._uow_factory() as uow:
+            uow.weekly_targets.save(WeeklyTarget(iso_week, target_minutes), self._when(None))
+        return self.weekly_progress(iso_week)
+
+    def app_preferences(self) -> AppPreferencesView:
+        """Read setup/settings values with the agreed first-run defaults."""
+        with self._uow_factory() as uow:
+            target = uow.settings.get("default_weekly_target_minutes")
+            sleep_enabled = uow.settings.get("sleep_detection_enabled")
+            sleep_minutes = uow.settings.get("sleep_threshold_minutes")
+            theme = uow.settings.get("theme")
+        return AppPreferencesView(
+            rounding_minutes=self.rounding_minutes,
+            weekly_target_minutes=target if isinstance(target, int) and target >= 0 else 37 * 60,
+            sleep_enabled=sleep_enabled is not False,
+            sleep_threshold_minutes=sleep_minutes
+            if isinstance(sleep_minutes, int) and sleep_minutes > 0
+            else 30,
+            theme=theme if theme in {"system", "light", "dark"} else "system",
+        )
+
+    def save_app_preferences(self, preferences: AppPreferencesView) -> None:
+        if preferences.rounding_minutes not in VALID_ROUNDING_MINUTES:
+            raise ValueError("rounding must be one of 1, 5, 10, or 15 minutes")
+        if preferences.weekly_target_minutes < 0 or preferences.sleep_threshold_minutes < 1:
+            raise ValueError("Target and sleep threshold must be valid positive values.")
+        if preferences.theme not in {"system", "light", "dark"}:
+            raise ValueError("Theme must be system, light, or dark.")
+        now = self._when(None)
+        self._rounding_minutes = preferences.rounding_minutes
+        with self._uow_factory() as uow:
+            uow.settings.save("rounding_minutes", preferences.rounding_minutes, now)
+            uow.settings.save(
+                "default_weekly_target_minutes", preferences.weekly_target_minutes, now
+            )
+            uow.settings.save("sleep_detection_enabled", preferences.sleep_enabled, now)
+            uow.settings.save("sleep_threshold_minutes", preferences.sleep_threshold_minutes, now)
+            uow.settings.save("theme", preferences.theme, now)
+
+    def setup_complete(self) -> bool:
+        with self._uow_factory() as uow:
+            return uow.settings.get("setup_completed") is True
+
+    def complete_setup(self) -> None:
+        with self._uow_factory() as uow:
+            uow.settings.save("setup_completed", True, self._when(None))
+
+    def reminder_settings(self) -> ReminderSettingsView:
+        with self._uow_factory() as uow:
+            work_enabled = uow.settings.get("work_reminder_enabled")
+            work_minutes = uow.settings.get("work_reminder_minutes")
+            lunch_enabled = uow.settings.get("lunch_reminder_enabled")
+            lunch_minutes = uow.settings.get("lunch_reminder_minutes")
+        return ReminderSettingsView(
+            work_enabled=work_enabled is not False,
+            work_minutes=work_minutes
+            if isinstance(work_minutes, int) and work_minutes > 0
+            else 9 * 60,
+            lunch_enabled=lunch_enabled is not False,
+            lunch_minutes=lunch_minutes
+            if isinstance(lunch_minutes, int) and lunch_minutes > 0
+            else 45,
+        )
+
+    def set_reminder_settings(self, settings: ReminderSettingsView) -> None:
+        if settings.work_minutes < 1 or settings.lunch_minutes < 1:
+            raise ValueError("Reminder thresholds must be at least one minute.")
+        now = self._when(None)
+        with self._uow_factory() as uow:
+            uow.settings.save("work_reminder_enabled", settings.work_enabled, now)
+            uow.settings.save("work_reminder_minutes", settings.work_minutes, now)
+            uow.settings.save("lunch_reminder_enabled", settings.lunch_enabled, now)
+            uow.settings.save("lunch_reminder_minutes", settings.lunch_minutes, now)
+
+    def due_reminders(self) -> list[ReminderView]:
+        """Return each unsnoozed threshold crossing once for the active session."""
+        now = self._when(None)
+        settings = self.reminder_settings()
+        due: list[ReminderView] = []
+        with self._uow_factory() as uow:
+            session = uow.sessions.get_active()
+            if session is None:
+                return due
+            deductions = uow.deductions.list_for_session(session.id)
+            state_net_seconds = net_seconds(session, deductions, now)
+            elapsed_seconds = int((now - session.actual_started_at).total_seconds())
+            active_deduction = uow.deductions.get_active(session.id)
+            candidates: list[tuple[str, int, bool]] = [
+                ("work", settings.work_minutes * 60, settings.work_enabled)
+            ]
+            if active_deduction is not None and active_deduction.kind is DeductionKind.LUNCH:
+                candidates.append(("lunch", settings.lunch_minutes * 60, settings.lunch_enabled))
+            for kind, threshold, enabled in candidates:
+                duration = (
+                    int((now - active_deduction.actual_started_at).total_seconds())
+                    if kind == "lunch" and active_deduction is not None
+                    else elapsed_seconds
+                )
+                if (
+                    not enabled
+                    or duration < threshold
+                    or self._reminder_is_suppressed(uow, kind, session.id, now)
+                ):
+                    continue
+                uow.settings.save(f"reminder_notified_{kind}", {"session_id": str(session.id)}, now)
+                due.append(ReminderView(kind, duration, state_net_seconds))
+        return due
+
+    def snooze_reminder(self, kind: str, minutes: int) -> None:
+        if kind not in {"work", "lunch"} or minutes not in {15, 30, 60}:
+            raise ValueError("Reminder snooze must be 15, 30, or 60 minutes.")
+        now = self._when(None)
+        with self._uow_factory() as uow:
+            session = uow.sessions.get_active()
+            if session is None:
+                return
+            uow.settings.save(
+                f"reminder_snooze_{kind}",
+                {
+                    "session_id": str(session.id),
+                    "until": (now + timedelta(minutes=minutes)).isoformat(),
+                },
+                now,
+            )
+            uow.settings.save(f"reminder_notified_{kind}", None, now)
+
+    @staticmethod
+    def _reminder_is_suppressed(
+        uow: UnitOfWork, kind: str, session_id: SessionId, now: datetime
+    ) -> bool:
+        snooze = uow.settings.get(f"reminder_snooze_{kind}")
+        if isinstance(snooze, dict) and snooze.get("session_id") == str(session_id):
+            try:
+                if datetime.fromisoformat(str(snooze["until"])) > now:
+                    return True
+            except (KeyError, ValueError):
+                pass
+        notified = uow.settings.get(f"reminder_notified_{kind}")
+        return isinstance(notified, dict) and notified.get("session_id") == str(session_id)
+
+    def _summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
+        start = datetime.combine(start_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        end = datetime.combine(end_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        now = self._when(None)
+        totals: dict[date, _DayTotal] = {
+            current: _DayTotal()
+            for current in (
+                start_date + timedelta(days=offset)
+                for offset in range((end_date - start_date).days)
+            )
+        }
+        with self._uow_factory() as uow:
+            sessions = uow.sessions.list_intersecting(start, end)
+            details = {work_date: uow.days.get(work_date) for work_date in totals}
+            for session in sessions:
+                session_start = session.effective_started_at or session.actual_started_at
+                session_end = session.effective_ended_at or session.actual_ended_at or now
+                if session_end <= start or session_start >= end:
+                    continue
+                deductions = uow.deductions.list_for_session(session.id)
+                for piece_start, piece_end in split_at_local_midnight(
+                    max(session_start, start), min(session_end, end)
+                ):
+                    work_date = piece_start.astimezone(COPENHAGEN).date()
+                    total = totals[work_date]
+                    total.session_count += 1
+                    total.first_start = self._earlier(total.first_start, piece_start)
+                    total.final_finish = self._later(total.final_finish, piece_end)
+                    gross = int((piece_end - piece_start).total_seconds())
+                    excluded = 0
+                    for deduction in deductions:
+                        if deduction.deleted_at is not None:
+                            continue
+                        deduction_start = (
+                            deduction.effective_started_at or deduction.actual_started_at
+                        )
+                        deduction_end = (
+                            deduction.effective_ended_at or deduction.actual_ended_at or now
+                        )
+                        overlap_start = max(piece_start, deduction_start)
+                        overlap_end = min(piece_end, deduction_end)
+                        if overlap_end <= overlap_start:
+                            continue
+                        seconds = int((overlap_end - overlap_start).total_seconds())
+                        excluded += seconds
+                        field = (
+                            "lunch_seconds"
+                            if deduction.kind is DeductionKind.LUNCH
+                            else "break_seconds"
+                        )
+                        if field == "lunch_seconds":
+                            total.lunch_seconds += seconds
+                        else:
+                            total.break_seconds += seconds
+                    total.net_seconds += gross - excluded
+                    if session.actual_ended_at is None:
+                        total.is_provisional = True
+        summaries: list[DaySummaryView] = []
+        for work_date, total in totals.items():
+            detail = details[work_date]
+            summaries.append(
+                DaySummaryView(
+                    work_date=work_date,
+                    first_start=total.first_start,
+                    final_finish=total.final_finish,
+                    session_count=total.session_count,
+                    lunch_seconds=total.lunch_seconds,
+                    break_seconds=total.break_seconds,
+                    net_seconds=total.net_seconds,
+                    location=detail.location if detail is not None else None,
+                    has_note=bool(detail.note) if detail is not None else False,
+                    is_provisional=total.is_provisional,
+                )
+            )
+        return summaries
+
+    @staticmethod
+    def _earlier(current: datetime | None, candidate: datetime) -> datetime:
+        return candidate if current is None or candidate < current else current
+
+    @staticmethod
+    def _later(current: datetime | None, candidate: datetime) -> datetime:
+        return candidate if current is None or candidate > current else current
 
     def sleep_threshold_seconds(self) -> int:
         with self._uow_factory() as uow:
@@ -602,6 +913,8 @@ class TimeTrackingApplicationService:
         session.source = EntrySource(str(snapshot["source"]))
         session.deleted_at = TimeTrackingApplicationService._optional_time(snapshot, "deleted_at")
         session.rounding_minutes = int(cast(int, snapshot["rounding_minutes"]))
+        task_id = snapshot.get("testhuset_task_id")
+        session.testhuset_task_id = str(task_id) if task_id is not None else None
         session.updated_at = now
         session.revision += 1
 
@@ -646,6 +959,7 @@ class TimeTrackingApplicationService:
             "source": session.source.value,
             "deleted_at": session.deleted_at.isoformat() if session.deleted_at else None,
             "rounding_minutes": session.rounding_minutes,
+            "testhuset_task_id": session.testhuset_task_id,
         }
 
     @staticmethod

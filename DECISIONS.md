@@ -114,3 +114,7 @@ This file records the shared understanding reached during the design interview. 
 - 2026-09-15: v1.0 confirmed after four design-interview rounds and explicit shared-understanding confirmation.
 - 2026-09-17: Epic I implementation authorized. User-managed browser login (D090) takes precedence
   over collecting credentials in QI Flow. Live weekly-sheet structure inspected without hour writes.
+- 2026-09-17: v0.1.1 completes a timer-created lunch shorter than its rounding interval using its
+  known actual boundaries, rather than leaving lunch active or inventing rounded time. The session
+  editor now adds lunch directly to the selected completed session, and saving Settings refreshes
+  Today’s sleep controls immediately.

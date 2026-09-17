@@ -2,7 +2,7 @@
 
 #define MyAppName "QI Flow"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.1.1"
 #endif
 #define MyAppPublisher "QI Flow"
 #define MyAppExeName "QI Flow.exe"

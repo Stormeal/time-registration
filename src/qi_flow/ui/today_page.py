@@ -187,6 +187,20 @@ class TodayPage(QWidget):
             self._lunch.setText("Start lunch")
             self._finish_work.setEnabled(not blocked)
 
+    def reload_configurable_options(self) -> None:
+        """Reflect values saved from Settings without waiting for an app restart."""
+        preferences = self._service.app_preferences()
+        controls = (self._rounding, self._sleep_enabled, self._sleep_threshold)
+        for control in controls:
+            control.blockSignals(True)
+        try:
+            self._rounding.setCurrentIndex((1, 5, 10, 15).index(preferences.rounding_minutes))
+            self._sleep_enabled.setChecked(preferences.sleep_enabled)
+            self._sleep_threshold.setValue(preferences.sleep_threshold_minutes)
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
     def _start(self) -> None:
         self._run(lambda: self._service.start_work(StartWorkCommand()))
 

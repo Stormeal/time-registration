@@ -1,6 +1,6 @@
 # Work time tracker — requirements
 
-Version: 0.5 · Updated: 2026-09-15 · Status: iteration 1 approved; user stories drafted
+Version: 0.5 · Updated: 2026-09-17 · Status: iteration 1 approved; user stories drafted
 
 ## Goal and context
 
@@ -130,6 +130,9 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
 - 2026-09-15: v0.3 defines iteration 1 as a local-only tracker. Google Sheets sync and workplace integrations remain planned for later iterations.
 - 2026-09-15: v0.4 resolves tray closing, continuous work sessions with separately deducted lunch, and monthly grouping by calendar week number.
 - 2026-09-15: v0.5 records the completed design interview in `DECISIONS.md` and adds the approved iteration 1 behaviors R20–R30. User stories drafted; development not started.
+- 2026-09-17: v0.1.1 fixes completion of short timer lunches, lets a selected completed session
+  receive a manual lunch deduction from its editor, and keeps Today’s sleep threshold aligned with
+  saved Settings.
 - Future sessions: read this file and `DESIGN.md` first; update decisions and statuses explicitly. Do not infer approval from the existence of these documents.
 
 ## Epic I delivery — 17/09/2026

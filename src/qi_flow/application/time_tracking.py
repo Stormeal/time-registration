@@ -732,9 +732,16 @@ class TimeTrackingApplicationService:
             deduction = uow.deductions.get_active(session.id)
             if deduction is None:
                 raise InvalidStateTransitionError("No lunch or break is running.")
-            start, end = effective_interval(
-                deduction.actual_started_at, now, deduction.rounding_minutes
-            )
+            try:
+                start, end = effective_interval(
+                    deduction.actual_started_at, now, deduction.rounding_minutes
+                )
+            except InvalidIntervalError:
+                # A timer-created deduction can be shorter than the selected rounding
+                # interval.  Its actual boundaries are still a valid, known duration;
+                # retain them rather than trapping the user in an active lunch or
+                # manufacturing a rounded minute.
+                start, end = deduction.actual_started_at, now
             deduction.actual_ended_at = now
             deduction.effective_started_at = start
             deduction.effective_ended_at = end

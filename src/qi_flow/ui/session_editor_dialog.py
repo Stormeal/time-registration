@@ -28,7 +28,7 @@ from qi_flow.application.dto import (
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
-from qi_flow.domain.models import Deduction, WorkLocation, WorkSession
+from qi_flow.domain.models import Deduction, DeductionKind, WorkLocation, WorkSession
 from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
@@ -60,8 +60,9 @@ class SessionEditorDialog(QDialog):
         self._save.setEnabled(False)
         self._delete = QPushButton("Delete selected")
         self._delete.setEnabled(False)
-        add = QPushButton("Add entry")
-        add.clicked.connect(self._add)
+        self._add_lunch = QPushButton("Add lunch")
+        self._add_lunch.setEnabled(False)
+        self._add_lunch.clicked.connect(self._add_lunch_to_selected_session)
         self._save.clicked.connect(self._save_selected)
         self._delete.clicked.connect(self._delete_selected)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -93,7 +94,7 @@ class SessionEditorDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self._tree)
         layout.addLayout(form)
-        layout.addWidget(add)
+        layout.addWidget(self._add_lunch)
         layout.addWidget(buttons)
         self._load_office_status()
         self._refresh()
@@ -126,6 +127,7 @@ class SessionEditorDialog(QDialog):
         enabled = selected is not None
         self._task.setEnabled(isinstance(selected, WorkSession))
         self._save_task.setEnabled(isinstance(selected, WorkSession))
+        self._add_lunch.setEnabled(isinstance(selected, WorkSession))
         if isinstance(selected, WorkSession):
             index = self._task.findData(selected.testhuset_task_id)
             if index < 0:
@@ -172,8 +174,16 @@ class SessionEditorDialog(QDialog):
             return
         self._refresh()
 
-    def _add(self) -> None:
-        dialog = ManualEntryDialog(self._service, self._work_date)
+    def _add_lunch_to_selected_session(self) -> None:
+        selected = self._selected_value()
+        if not isinstance(selected, WorkSession):
+            return
+        dialog = ManualEntryDialog(
+            self._service,
+            self._work_date,
+            deduction_kind=DeductionKind.LUNCH,
+            parent_session_id=selected.id,
+        )
         dialog.exec()
         self._refresh()
 

@@ -6,7 +6,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QDate, QProcess
+from PySide6.QtCore import QCoreApplication, QDate, QProcess, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -38,6 +38,8 @@ from qi_flow.ui.testhuset_dialog import SheetFactory, TesthusetDialog
 
 class SettingsPage(QWidget):
     """Keep resilience actions explicit and make their current state visible."""
+
+    preferences_saved = Signal()
 
     def __init__(
         self,
@@ -288,6 +290,7 @@ class SettingsPage(QWidget):
             )
             self._startup.set_enabled(self._startup_enabled.isChecked())
             self._service.complete_setup()
+            self.preferences_saved.emit()
         except (RuntimeError, ValueError) as error:
             self._show_error("Could not save settings", str(error))
 

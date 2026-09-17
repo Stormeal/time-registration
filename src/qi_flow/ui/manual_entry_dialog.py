@@ -28,7 +28,11 @@ class ManualEntryDialog(QDialog):
     """Collect a completed exact-minute interval; close confirms unsaved discard."""
 
     def __init__(
-        self, service: TimeTrackingApplicationService, work_date: date | None = None
+        self,
+        service: TimeTrackingApplicationService,
+        work_date: date | None = None,
+        deduction_kind: DeductionKind | None = None,
+        parent_session_id: SessionId | None = None,
     ) -> None:
         super().__init__()
         self._service = service
@@ -63,6 +67,14 @@ class ManualEntryDialog(QDialog):
         self._buttons.accepted.connect(self._save)
         self._buttons.rejected.connect(self.reject)
         self._load_sessions()
+        if deduction_kind is not None:
+            self._kind.setCurrentIndex(self._kind.findData(deduction_kind.value))
+            self._kind.setEnabled(False)
+        if parent_session_id is not None:
+            index = self._parent.findData(str(parent_session_id))
+            if index >= 0:
+                self._parent.setCurrentIndex(index)
+            self._parent.setEnabled(False)
         self._update_parent_visibility()
 
     def _load_sessions(self) -> None:

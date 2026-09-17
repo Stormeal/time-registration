@@ -52,9 +52,24 @@ class MainWindow(QMainWindow):
 
         pages: list[tuple[str, QWidget]] = []
         if service is not None:
-            pages.append(("Today", TodayPage(service)))
+            today_page = TodayPage(service)
+            pages.append(("Today", today_page))
         else:
+            today_page = None
             pages.append(("Today", self._placeholder("Today", "Tracking service is unavailable.")))
+        settings_page: SettingsPage | None = None
+        if (
+            service is not None
+            and backups is not None
+            and exporter is not None
+            and paths is not None
+            and startup is not None
+        ):
+            settings_page = SettingsPage(
+                service, backups, exporter, paths, startup, testhuset, sheet_factory, credentials
+            )
+            if today_page is not None:
+                settings_page.preferences_saved.connect(today_page.reload_configurable_options)
         pages.extend(
             (
                 (
@@ -65,21 +80,8 @@ class MainWindow(QMainWindow):
                 ),
                 (
                     "Settings",
-                    SettingsPage(
-                        service,
-                        backups,
-                        exporter,
-                        paths,
-                        startup,
-                        testhuset,
-                        sheet_factory,
-                        credentials,
-                    )
-                    if service is not None
-                    and backups is not None
-                    and exporter is not None
-                    and paths is not None
-                    and startup is not None
+                    settings_page
+                    if settings_page is not None
                     else self._placeholder("Settings", "Settings are unavailable."),
                 ),
             )

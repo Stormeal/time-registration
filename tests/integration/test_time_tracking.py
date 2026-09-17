@@ -89,18 +89,22 @@ def test_work_and_multiple_lunches_persist_with_actual_and_rounded_boundaries(
     assert deductions[0].effective_ended_at == datetime(2026, 9, 15, 10, 35, tzinfo=UTC)
 
 
-def test_zero_length_rounded_lunch_rolls_back(tmp_path: Path) -> None:
+def test_short_rounded_lunch_finishes_with_its_actual_known_duration(tmp_path: Path) -> None:
     at = datetime(2026, 9, 15, 7, 2, tzinfo=UTC)
-    service, clock, _ = build_service(tmp_path, at)
+    service, clock, database = build_service(tmp_path, at)
     service.start_work(StartWorkCommand())
     clock.value += timedelta(hours=1)
     service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
     clock.value += timedelta(seconds=20)
 
-    with pytest.raises(InvalidIntervalError):
-        service.finish_deduction(FinishDeductionCommand())
+    state = service.finish_deduction(FinishDeductionCommand())
 
-    assert service.active_state().active_deduction_kind is DeductionKind.LUNCH
+    assert state.active_deduction_kind is None
+    with SQLiteUnitOfWork(database) as uow:
+        deduction = uow.deductions.list_for_session(SessionId("session-1"))[0]
+    assert deduction.actual_ended_at == clock.value
+    assert deduction.effective_started_at == deduction.actual_started_at
+    assert deduction.effective_ended_at == clock.value
 
 
 def test_previous_day_recovery_blocks_then_can_continue(tmp_path: Path) -> None:

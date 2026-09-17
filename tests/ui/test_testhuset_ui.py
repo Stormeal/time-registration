@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTime
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.domain.models import IsoWeek, WorkLocation
+from qi_flow.domain.models import DeductionKind, IsoWeek, WorkLocation
 from qi_flow.domain.testhuset import ProjectTask
 from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
@@ -55,6 +55,33 @@ def test_override_save_is_independent_of_time_correction(qtbot, tmp_path) -> Non
     assert saved.testhuset_task_id == task.id
     assert saved.actual_started_at == session.actual_started_at
     assert saved.actual_ended_at == session.actual_ended_at
+
+
+def test_selected_completed_session_offers_a_preselected_lunch_dialog(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    service, tracking, session, _ = build(tmp_path)
+    dialog = SessionEditorDialog(tracking, date(2026, 9, 14), service)
+    qtbot.addWidget(dialog)
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(0))
+    assert dialog._add_lunch.isEnabled()
+
+    captured: dict[str, object] = {}
+
+    class LunchDialog:
+        def __init__(self, *args, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def exec(self) -> None:
+            return None
+
+    monkeypatch.setattr("qi_flow.ui.session_editor_dialog.ManualEntryDialog", LunchDialog)
+    qtbot.mouseClick(dialog._add_lunch, Qt.MouseButton.LeftButton)
+
+    assert captured == {
+        "deduction_kind": DeductionKind.LUNCH,
+        "parent_session_id": session.id,
+    }
 
 
 def test_decimal_column_and_iso_week_group_selection(qtbot, tmp_path) -> None:

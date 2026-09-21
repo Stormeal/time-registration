@@ -1,76 +1,21 @@
-# QI Flow — iteration 1 user stories
+# QI Flow — active user stories
 
-Version: 0.3 · Updated: 2026-09-16 · Status: US01–US04 and US09–US20 implemented and verified
+Version: 1.0 · Updated: 2026-09-19 · Status: active backlog only
 
-These stories implement the confirmed local-only scope in `REQUIREMENTS.md` and `DECISIONS.md`. Priority definitions: **P0** is required for a usable tracker, **P1** is required before iteration 1 ships, and **P2** completes resilience and distribution.
+Completed stories and their original acceptance criteria are preserved in
+`USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
+after its acceptance criteria pass and any required release smoke check is recorded.
 
 ## Delivery status
 
-| Status | Stories | Meaning |
+| Status | Stories | Remaining work |
 | --- | --- | --- |
-| Complete | US01–US04, US09–US20 | Implemented and covered by automated checks. |
-| Complete | US22–US24 | Implemented and covered by automated checks. |
-| In progress | US05–US08 | Core persistence exists; remaining interaction and edge-case work is tracked in the story. |
-| In progress | US21 | Installer configuration is ready; clean-account verification remains. |
-| Complete | US25–US27 | Epic I implemented and covered by automated checks; live first-fill and packaged smoke checks remain. |
-
-## Epic A — Core tracking
-
-### US01 — Start and finish work · P0
-
-Implementation status: **Complete** · verified by `tests/integration/test_time_tracking.py`.
-
-As a consultant, I want to start and finish work with one action so that QI Flow records my work without manual calculation.
-
-Acceptance criteria:
-
-- Start work immediately persists an active session with actual and effective start information.
-- The active timer shows actual elapsed and net time.
-- Finish work applies the configured rounding, persists the result, and updates daily and weekly totals.
-- Starting again after Finish creates another session on the same date.
-- Start and Finish actions offer Undo for 30 seconds.
-
-### US02 — Record lunch inside a continuous session · P0
-
-Implementation status: **Complete** · verified by `tests/integration/test_time_tracking.py`.
-
-As a consultant, I want to time lunch without ending my work session so that gross presence and net work remain accurate.
-
-Acceptance criteria:
-
-- Start lunch is available only during active work and begins a persisted lunch interval.
-- The work session retains its original start while lunch is active.
-- End lunch closes and deducts the rounded lunch interval.
-- Finish work is unavailable while lunch is active.
-- Multiple lunch intervals are allowed in one work session, and invalid or zero-length rounded lunches require correction.
-
-### US03 — Apply configurable rounding · P0
-
-Implementation status: **Complete** · verified by `tests/integration/test_time_tracking.py`.
-
-As a consultant, I want consistent rounding for timer actions so that recorded hours follow my chosen precision.
-
-Acceptance criteria:
-
-- Settings offers 1, 5, 10, and 15-minute intervals, defaulting to 5.
-- Button actions use nearest-interval rounding when their interval completes.
-- Live elapsed time uses actual timestamps; ordinary timesheets use effective rounded timestamps.
-- Changing the setting affects future actions only.
-- Entry details can show original action timestamps.
-
-### US04 — Recover active tracking state · P0
-
-Implementation status: **Complete** · verified by `tests/integration/test_time_tracking.py`.
-
-As a consultant, I want active work and lunch to survive crashes, shutdowns, and process exit so that time is not silently lost.
-
-Acceptance criteria:
-
-- Every state transition is committed transactionally before the interface reports success.
-- Reopening reconstructs active work, lunch, and deducted-break state from timestamps.
-- An unfinished previous-day session blocks new timer actions until resolved.
-- Recovery allows setting a finish, deleting, continuing, or opening the timesheet without inventing a suggested finish time.
-- Continuing a cross-midnight session allocates totals between dates correctly.
+| In progress | US05–US08 | Correction/history interaction and recovery edge cases. |
+| In progress | US21 | Clean-account installer and upgrade verification; package Google sync dependencies. |
+| In progress | US28 | Complete authorization and synchronization behavior. |
+| In progress | US29 | Completed sessions and deductions merge through the shared sheet; explicit conflict resolution and other record types remain. |
+| In progress | US30 | Live DSB smoke check and release verification. |
+| Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
 
 ## Epic B — Corrections and daily records
 
@@ -131,176 +76,7 @@ Acceptance criteria:
 - Decide later permits viewing but disables timer actions until resolved.
 - Sleep detection can be disabled.
 
-## Epic C — Tray and lifecycle
-
-### US09 — Operate from the system tray · P0
-
-Implementation status: **Complete** · verified by `tests/ui/test_tray.py`.
-
-As a consultant, I want QI Flow available from the tray so that tracking does not occupy my taskbar or interrupt other work.
-
-Acceptance criteria:
-
-- Closing the main window hides it to the tray without changing timer state.
-- Left-click opens a compact panel containing current state, net time, session start, lunch duration, the valid timer action, Add entry, and Open timesheet.
-- Right-click shows the confirmed context-menu actions and an explicit Close app command.
-- Tray and main-window state remain consistent after every action.
-
-### US10 — Exit safely · P1
-
-Implementation status: **Complete** · verified by `tests/ui/test_exit_dialog.py`.
-
-As a consultant, I want an explicit warning when closing QI Flow during active tracking so that I choose what happens to the session.
-
-Acceptance criteria:
-
-- Close app exits immediately when no session is active.
-- During work, it offers Keep running and close, Finish work and close, or Cancel, with Cancel selected by default.
-- During lunch, it offers the equivalent explicit resolution without silently ending lunch.
-- Keeping the session running explains that reminders pause while the process is closed.
-- Finish and close saves the rounded finish before process exit.
-
-### US11 — Start once and focus the existing app · P1
-
-Implementation status: **Complete** · verified by `tests/ui/test_single_instance.py` and
-`tests/unit/test_startup.py`.
-
-As a consultant, I want predictable Windows startup and single-instance behavior so that two processes cannot alter the same database.
-
-Acceptance criteria:
-
-- Start with Windows is optional and disabled by default.
-- Automatic startup stays in the tray unless recovery needs attention.
-- Manual launch opens the full window.
-- A second launch activates the existing process and never opens the live database concurrently.
-
-## Epic D — Review and totals
-
-### US12 — Review a month by ISO week · P0
-
-Implementation status: **Complete** · verified by integration and UI tests.
-
-As a consultant, I want every day grouped by week number so that I can identify missing entries and review monthly time quickly.
-
-Acceptance criteria:
-
-- The month lists every day, including weekends, in ISO Monday–Sunday week groups.
-- Each daily row shows first start, final finish, session count, total lunch, net time, office status, and notes indicator.
-- A date with multiple sessions shows its boundary times and session count without treating the gap as work.
-- Selecting a day opens all sessions and deductions for editing.
-- Active time is clearly provisional.
-
-### US13 — Review weekly progress · P1
-
-Implementation status: **Complete** · verified by integration and UI tests.
-
-As a consultant, I want weekly totals compared with my target so that I know whether time is remaining or over target.
-
-Acceptance criteria:
-
-- The default target is 37 hours.
-- A per-week override changes only the selected week.
-- The summary reports logged and remaining/excess time neutrally.
-- Weekly and monthly summaries show hours/minutes and decimal hours.
-- Cross-midnight work is allocated to the correct ISO week.
-
-## Epic E — Reminders
-
-### US14 — Receive configurable reminders · P1
-
-Implementation status: **Complete** · verified by `tests/integration/test_time_tracking.py`.
-
-As a consultant, I want reminders for unusually long work and lunch so that I catch forgotten timer actions.
-
-Acceptance criteria:
-
-- Work reminder defaults to 9 elapsed hours including lunch; lunch reminder defaults to 45 minutes.
-- Each reminder can be enabled and configured independently.
-- Notifications show relevant elapsed/net time and offer Open QI Flow or 15/30/60-minute snooze.
-- State-changing actions occur inside QI Flow.
-- Reminders resume correctly after normal process restart and remain unavailable while the process is closed.
-
-## Epic F — Local resilience and export
-
-### US15 — Back up local data automatically · P1
-
-Implementation status: **Complete**.
-
-As a consultant, I want automatic backups so that a machine or database problem does not erase my only timesheet.
-
-Acceptance criteria:
-
-- QI Flow creates at most one complete, consistent backup per day and retains the newest 30.
-- Backup includes active state and settings.
-- Settings shows and allows changing the backup folder, including OneDrive locations.
-- A failure never blocks tracking and produces a persistent warning until a backup succeeds.
-
-### US16 — Restore data safely · P2
-
-Implementation status: **Complete**.
-
-As a consultant, I want guided restoration so that I can recover without accidentally overwriting the only usable database.
-
-Acceptance criteria:
-
-- Restore lists valid backups with timestamps and requires active ambiguity to be resolved first.
-- QI Flow makes a safety backup of current data before replacement.
-- Restoration requires confirmation and restarts the application afterward.
-- If the live database is unreadable, QI Flow does not create an empty replacement and offers the newest valid backup.
-
-### US17 — Export readable timesheets · P1
-
-Implementation status: **Complete**.
-
-As a consultant, I want CSV exports so that I can inspect or reuse my local records outside QI Flow.
-
-Acceptance criteria:
-
-- Export supports selected week, selected month, or all history.
-- Summary export emits one row per date; detailed export separates sessions, lunches, and deducted breaks.
-- Files are UTF-8 and semicolon-separated with Danish dates, 24-hour times, and decimal commas.
-- Deleted data and actual unrounded action metadata are excluded.
-
 ## Epic G — Setup, settings, and distribution
-
-### US18 — Configure QI Flow on first launch · P1
-
-Implementation status: **Complete**.
-
-As a consultant, I want a short initial setup so that useful defaults are transparent and adjustable.
-
-Acceptance criteria:
-
-- One compact screen presents rounding, target, startup, reminders, sleep threshold, theme, and backup settings.
-- Confirmed defaults from D072 are preselected.
-- Completion creates the local database and opens Today.
-- The setup can be completed without administrator permissions or network access.
-
-### US19 — Use Danish formats in an English interface · P1
-
-Implementation status: **Complete**.
-
-As a consultant, I want familiar regional formatting so that timesheets match how I work in Denmark.
-
-Acceptance criteria:
-
-- Labels are English; dates use `dd/MM/yyyy`; times use 24-hour format; week numbers follow ISO 8601.
-- Elapsed calculations use Europe/Copenhagen and remain correct through daylight-saving changes.
-- Theme follows Windows by default with Light and Dark overrides.
-- QI Flow uses the approved teal direction and consistent QI app/tray identity.
-
-### US20 — Diagnose locally without telemetry · P2
-
-Implementation status: **Complete**.
-
-As a user, I want privacy-safe local diagnostics so that problems can be investigated without sending my work records elsewhere.
-
-Acceptance criteria:
-
-- Logs retain approximately seven days and avoid notes and time-entry contents where possible.
-- Settings exposes the application-data path and Open log folder.
-- The live database path is standard per-user application data and cannot be relocated from the UI.
-- QI Flow performs no telemetry or automatic update checks.
 
 ### US21 — Install and upgrade on Windows · P2
 
@@ -315,142 +91,91 @@ Acceptance criteria:
 - Uninstall behavior clearly distinguishes application removal from user-data removal.
 - No global keyboard shortcuts are registered in iteration 1.
 
-## Epic H — Corrections, guidance, and identity
+## Epic J — Google Sheets cross-machine synchronization
 
-### US22 — Correct completed timesheet entries · P1
+### US28 — Connect a private shared timesheet · P1
 
-Implementation status: **Complete**.
+Implementation status: **In progress** · Settings validates and saves a Sheet URL and desktop OAuth client ID; authorization and synchronization remain to be implemented.
 
-As a consultant, I want to edit completed work sessions and deductions from Timesheet so that
-my recorded time remains accurate when I notice a mistake.
-
-Acceptance criteria:
-
-- Selecting or double-clicking a day provides an **Edit sessions** action that opens a focused editor
-  for that day.
-- The editor lists completed work sessions and their lunch/break deductions, and supports adding,
-  editing, and deleting them.
-- The editor title identifies the selected date; its list and correction controls show times only.
-- The editor can mark the selected day as office work without changing its daily note.
-- Active work and active lunch remain managed through Today and cannot be edited in the correction
-  editor.
-- Edited entries use the exact start and finish times entered by the user; they are treated as
-  manual corrections and are not rounded again.
-- Saves reject overlapping work sessions and deductions that fall outside their parent session,
-  with a clear explanation of the conflict.
-- Existing 30-day audit and restore behavior remains available for changed and deleted entries.
-
-### US23 — Explain configurable Today options · P2
-
-Implementation status: **Complete**.
-
-As a consultant, I want short help text for Today options so that I can enable them with
-confidence.
+As a consultant, I want to connect QI Flow to my private Google Sheet so that my work laptop and personal desktop can use the same timesheet safely.
 
 Acceptance criteria:
 
-- Hovering a configurable Today label or control shows a concise English tooltip.
-- Tooltips cover rounding, office location, sleep detection, sleep threshold, work reminder, and
-  lunch reminder.
-- Each tooltip states the trigger and the resulting behavior.
-- Sleep-detection help states that QI Flow asks for a decision and never removes time
-  automatically.
+- Settings accepts a valid `docs.google.com/spreadsheets` URL and desktop OAuth client ID; neither is embedded in the application or diagnostic logs.
+- Each machine authorizes directly with Google in a visible browser flow. Refresh tokens are stored only in Windows Credential Manager and can be disconnected from Settings.
+- QI Flow creates and owns dedicated structured sync tabs only; existing workbook tabs, formulas, formatting, and history remain unchanged.
+- Sync can be initiated explicitly, reports its last successful time and actionable failure state, and never submits workplace time registrations.
 
-### US24 — Use a recognizable QI Flow icon · P2
+### US29 — Synchronize records without silent loss · P1
 
-Implementation status: **Complete**.
+Implementation status: **In progress** · completed work sessions and deductions are merged by
+stable ID and revision. An empty local installation imports remote completed history before it
+writes, so it cannot clear the shared tab.
 
-As a consultant, I want a clear QI Flow icon so that I can find the application reliably in
-Windows.
-
-Acceptance criteria:
-
-- The icon is a modern teal QI monogram with a subtle clock hand and remains recognizable at tray
-  size.
-- A multi-resolution Windows `.ico` file and PNG source assets are versioned with the project.
-- The same icon appears in the application window, tray, packaged executable, Start menu, and
-  installer.
-- The icon remains legible in light and dark Windows themes.
-
-## Epic I — Testhuset weekly registration
-
-### US25 — Scan Testhuset project tasks · P1
-
-Implementation status: **Complete** · live page inspected read-only; browser contract covered by
-`tests/integration/test_testhuset_browser.py`.
-
-As a consultant, I want to scan my available Testhuset weekly-sheet tasks so that I can choose
-where QI Flow should register time.
+As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 
 Acceptance criteria:
 
-- **Scan Testhuset tasks** opens a visible, temporary browser session. By default the user enters
-  credentials directly on Testhuset's login page. They may opt in to save a sign-in in Windows
-  Credential Manager, which QI Flow fills only into that temporary browser.
-- The temporary browser context is closed after use. QI Flow never writes credentials to its own
-  files, backups, exports, or logs, and never stores cookies or session tokens.
-- The browser opens Testhuset's `weeksheet2.aspx` directly, then scans the selected ISO week without
-  changing a Testhuset value. Testhuset presents its usual login page when authentication is needed.
-- Scanning stores project/task display names and stable page identifiers in a local
-  `testhuset-projects.json` cache, adds new tasks, and removes tasks absent from the latest scan.
-- Settings lets each user choose their own default project/task after a successful scan; no
-  preconfigured task is assumed.
+- Work sessions, deductions, day details, assignments, deletions, and revisions use stable IDs and synchronize independently of presentation tabs.
+- A completed local change is persisted before any network operation; offline changes remain pending and retry on the next explicit or scheduled sync.
+- Concurrent edits to the same record are presented as a conflict with clear local and remote choices; QI Flow never silently overwrites either value.
+- Active timers remain local until they become completed records; sync never creates a second active timer on another machine.
+- Sync runs at app opening and closing on a best-effort basis, after a local change, and on a bounded periodic schedule while the app is open.
 
-### US26 — Assign Testhuset tasks to work · P1
+## Epic K — DSB internal time registration
 
-Implementation status: **Complete** · covered by assignment, migration, audit, allocation and UI tests.
+### US30 — Review and insert DSB hours · P1
 
-As a consultant, I want work sessions to use a default Testhuset task with per-session overrides
-so that exceptional work is registered in the right slot.
+Implementation status: **In progress** · the Timesheet action, allocation default, reviewed per-day fill, and explicit DSB send flow are implemented; a live DSB smoke check remains.
+
+As a DSB consultant, I want to review and insert a selected ISO week's completed hours into DSB so that I do not have to re-enter them manually.
 
 Acceptance criteria:
 
-- Each completed work session uses the configured default Testhuset project/task unless it has an
-  explicit override.
-- The completed-session editor offers an override dropdown populated from the latest task scan.
-- If the configured default is absent from a fresh scan, QI Flow stops and requires a current task
-  selection before publishing.
-- Timesheet shows a **Decimal hours** column for each date, calculated from rounded net time and
-  formatted with two period-separated decimal places.
+- Settings opt-in, allocation scanning, and the default allocation remain per-user and disabled unless the user enables DSB time registration.
+- Selecting a Timesheet date exposes **Review & insert DSB hours — week X, YYYY** only when DSB is enabled.
+- The review lists the chosen week, allocation, QI Flow decimal hours, existing DSB hours, and a per-row keep-or-replace decision before any external value is changed.
+- The DSB browser uses the selected ISO week, fills only confirmed rows, then uses DSB's **Send** action. It never approves or locks the week.
+- Any uncertain browser result stops the operation and requires a fresh review; it never retries or approves a week automatically.
 
-### US27 — Fill a Testhuset timesheet safely · P1
+### US31 — Exclude non-DSB branches from DSB hours · P1
 
-Implementation status: **Complete** · confirmation, stale previews, conflict choices, matching values,
-failed saves and accepted-value checks verified with isolated browser fixtures. No live hours
-were changed; a first real fill remains a release smoke check.
+Implementation status: **Not started**.
 
-As a consultant, I want QI Flow to prepare and fill my Testhuset week safely so that I can avoid
-re-entering daily decimal hours.
+As a consultant who sometimes works on internal Testhuset activities, I want to choose which
+Testhuset project/task branches count as DSB work so that QI Flow inserts only DSB-related hours
+into DSB.
 
 Acceptance criteria:
 
-- Publishing uses the ISO week selected in Timesheet and navigates Testhuset from its current week
-  to that matching week before scanning rows or filling values.
-- QI Flow shows a date, project/task, and decimal-hour preview and requires **Fill Testhuset
-  timesheet** confirmation before changing any Testhuset slot.
-- QI Flow writes exactly two decimal places with a period, such as `7.75` for 7 hours 45 minutes.
-  It reads Testhuset comma values such as `7,75` as decimal hours and rejects ambiguous values
-  such as `7.750`.
-- Matching existing slot values are left unchanged. Each differing value defaults to
-  **Replace with QI Flow value**; the user can instead choose **Keep Testhuset value** per slot.
-- QI Flow waits for and verifies Testhuset’s own save/update response for every changed slot.
-- A currently active work session is excluded from the preview, so completed days in the same week
-  can still be filled before the current day is finished.
-- After a successful fill, QI Flow states that closing the week remains a manual Testhuset action;
-  it does not automate the irreversible close-week control.
+- Settings lets the user select one or more branches from the latest scanned Testhuset task list
+  as **Included in DSB hours**. No branch is enabled implicitly from its name.
+- The selection supports the three currently identified DSB branches without hard-coding them:
+  **Teknisk Tester**, **overarb - 50% (de første 3 timer på hverdage)**, and
+  **Overarb - 100% (efter 3.time på hd + lør/søn/hd)** under
+  **Team Web, DSB (AST) - 12522**.
+- DSB allocation uses each completed work session's resolved Testhuset assignment, including its
+  per-session override. Only sessions assigned to a branch currently included for DSB contribute
+  hours to the DSB preview and fill.
+- A session assigned to another Testhuset or internal branch remains available for Testhuset
+  registration and ordinary QI Flow totals, but contributes zero hours to DSB.
+- The DSB review clearly shows the week's included DSB total and excluded total before any external
+  value is changed. Excluded sessions can be inspected by date and branch.
+- Sessions with no resolvable Testhuset assignment are excluded and called out for review rather
+  than silently treated as DSB work.
+- Changing the included-branch selection invalidates an already prepared DSB review and requires a
+  fresh review before **Send**.
+- If no branch is included, QI Flow blocks DSB preview/fill with an actionable explanation.
 
-## Iteration 1 release acceptance
+## Release acceptance still open
 
-- All iteration-1 P0, P1, and P2 stories (US01–US24) meet their acceptance criteria.
-- Automated tests cover calculations, rounding, validation, SQLite transactions/migrations, recovery, backup, restore, and export.
 - A clean Windows-account test passes installation and the Start → Lunch → End lunch → Finish → edit → restart → export flow.
 - Recovery tests cover crash, Windows shutdown, previous-day active state, sleep classification, corrupted database, and invalid rounded intervals.
-- Google and SAP capabilities remain deferred. Epic I (US25–US27) is a separately authorized
-  integration; it fills Testhuset hours only after preview confirmation and never closes a week.
+- Testhuset receives a first real-fill and packaged-installer smoke check without automating week closure.
+- DSB receives a live reviewed-fill smoke check without approving or locking the week.
 
 ## Review status
 
 - Requirements and decision interview: approved.
-- User stories: awaiting review.
-- Development: US01–US04, US09–US20, and US22–US27 are implemented and verified; US05–US08
-  and US21 remain in progress.
+- Completed stories: archived in `USER_STORIES_ARCHIVE.md`.
+- New epics and stories: intentionally deferred until the current product-direction ideas are reviewed.

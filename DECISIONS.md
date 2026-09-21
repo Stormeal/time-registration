@@ -30,7 +30,7 @@ This file records the shared understanding reached during the design interview. 
 | ID | Confirmed decision |
 | --- | --- |
 | D020 | Rounding options are 1, 5, 10, and 15 minutes; the default is 5 minutes. Setting changes apply only to future button actions. |
-| D021 | Button actions use normal nearest-interval rounding. Actual button-press timestamps are retained as metadata. |
+| D021 | Timer-created work sessions use outward rounding: Start work rounds down and Finish work rounds up to the configured boundary. Timer-created lunch deductions use nearest-interval rounding. Actual button-press timestamps are retained as metadata. |
 | D022 | Active timers display actual elapsed time. Rounding is applied when the interval is completed. Ordinary timesheets show rounded effective values; actual timestamps are available in entry details. |
 | D023 | Manual entry accepts exact minute values without applying automatic rounding. Future-dated entries are blocked. |
 | D024 | If rounding produces an invalid or zero-length interval, show the result and require correction; do not invent duration. |
@@ -101,6 +101,11 @@ This file records the shared understanding reached during the design interview. 
 | D096 | Session overrides are stable Testhuset task/project row IDs. Sessions without overrides resolve the current default when previewing, including historical sessions. Assignment changes preserve timestamps and participate in the existing 30-day recovery history. |
 | D097 | Every differing slot, including blank/zero, requires an explicit keep-or-replace choice. Task/day net seconds are summed before decimal rounding (nearest hundredth, half up). Only previewed slots are written; unrelated destination values remain untouched. |
 | D098 | Testhuset browser failures stop immediately without blind retries or rollback writes. Reopen a fresh preview to reconcile partial saves. Temporary non-persistent Edge contexts are closed on success, cancellation and handled failure. |
+| D099 | Epic J is authorized on 2026-09-17. Google Sheets is optional and configured per user with a private Sheet URL and desktop OAuth client ID; credentials are never embedded in QI Flow. |
+| D100 | Google authorization occurs separately on each machine. Refresh tokens live only in Windows Credential Manager; the Sheet holds structured records and revisions, never OAuth credentials. |
+| D101 | QI Flow owns only dedicated structured tabs in the selected Sheet and must preserve all existing user tabs, formulas, formatting, and history. Conflicting edits require an explicit user decision. |
+| D102 | DSB registration uses the Timesheet-selected ISO week, requires a reviewed keep-or-replace decision per differing day, and invokes DSB's **Send** action only after confirmation. It never approves or locks a DSB week. |
+| D103 | DSB totals use only completed sessions whose resolved Testhuset project/task branch is in a user-managed DSB allowlist. Other and unresolved branches are excluded from DSB without changing QI Flow or Testhuset totals. The review exposes included and excluded totals, and an allowlist change invalidates an existing review. |
 
 ## Completion standard
 
@@ -118,3 +123,10 @@ This file records the shared understanding reached during the design interview. 
   known actual boundaries, rather than leaving lunch active or inventing rounded time. The session
   editor now adds lunch directly to the selected completed session, and saving Settings refreshes
   Today’s sleep controls immediately.
+- 2026-09-17: Epic J authorized for optional Google Sheets synchronization. US28–US29 define the
+  connection, authorization, structured-record, and conflict-resolution boundaries.
+- 2026-09-20: D021 changed from nearest rounding for every timer boundary to outward work-session
+  rounding. With 15-minute rounding, 07:05 starts at 07:00 and 16:10 finishes at 16:15. Lunch
+  deductions remain nearest-rounded.
+- 2026-09-20: D103 adds a user-managed Testhuset-branch allowlist for DSB. The three currently
+  identified Team Web, DSB branches can be selected, but are not hard-coded or inferred by name.

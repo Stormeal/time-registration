@@ -15,10 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qi_flow.application.dsb import DsbService
+from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
+from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.ui.settings_page import SettingsPage
@@ -40,6 +43,10 @@ class MainWindow(QMainWindow):
         testhuset: TesthusetService | None = None,
         sheet_factory: SheetFactory | None = None,
         credentials: TesthusetCredentialStore | None = None,
+        dsb: DsbService | None = None,
+        dsb_sheet_factory: SheetFactory | None = None,
+        google_sync: GoogleSyncSettings | None = None,
+        google_oauth: GoogleOAuthStore | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -66,17 +73,33 @@ class MainWindow(QMainWindow):
             and startup is not None
         ):
             settings_page = SettingsPage(
-                service, backups, exporter, paths, startup, testhuset, sheet_factory, credentials
+                service,
+                backups,
+                exporter,
+                paths,
+                startup,
+                testhuset,
+                sheet_factory,
+                credentials,
+                dsb,
+                dsb_sheet_factory,
+                google_sync,
+                google_oauth,
             )
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)
+        timesheet_page = (
+            TimesheetPage(service, testhuset, sheet_factory, dsb, dsb_sheet_factory)
+            if service is not None
+            else self._placeholder("Timesheet", "Tracking service is unavailable.")
+        )
+        if settings_page is not None and isinstance(timesheet_page, TimesheetPage):
+            settings_page.dsb_enabled_changed.connect(timesheet_page.refresh_dsb_availability)
         pages.extend(
             (
                 (
                     "Timesheet",
-                    TimesheetPage(service, testhuset, sheet_factory)
-                    if service is not None
-                    else self._placeholder("Timesheet", "Tracking service is unavailable."),
+                    timesheet_page,
                 ),
                 (
                     "Settings",

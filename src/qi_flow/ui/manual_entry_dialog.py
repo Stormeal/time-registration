@@ -117,5 +117,7 @@ class ManualEntryDialog(QDialog):
     @staticmethod
     def _as_copenhagen(work_date: QDate, work_time: QTime) -> datetime:
         return datetime.combine(
-            cast(date, work_date.toPython()), cast(time, work_time.toPython()), tzinfo=COPENHAGEN
+            cast(date, work_date.toPython()),
+            time(work_time.hour(), work_time.minute()),
+            tzinfo=COPENHAGEN,
         )

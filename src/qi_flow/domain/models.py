@@ -58,6 +58,7 @@ class WorkSession:
     revision: int = 1
 
     testhuset_task_id: str | None = None
+    dsb_allocation_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (

@@ -135,10 +135,10 @@ def test_csv_exports_use_danish_formats_and_exclude_raw_timer_metadata(tmp_path:
     summary_text = summary.read_text(encoding="utf-8")
     detailed_text = detailed.read_text(encoding="utf-8")
     assert "Dato;Start;Slut" in summary_text
-    assert "15/09/2026;09:00;17:00" in summary_text
-    assert "7,50" in summary_text
+    assert "15/09/2026;09:00;17:05" in summary_text
+    assert "7,58" in summary_text
     assert "Type;Dato;Start;Slut;Timer" in detailed_text
-    assert "Arbejde;15/09/2026;09:00;17:00;8,00" in detailed_text
+    assert "Arbejde;15/09/2026;09:00;17:05;8,08" in detailed_text
     assert "Frokost;15/09/2026;14:00;14:30;0,50" in detailed_text
     assert "session-1" not in detailed_text
     assert "09:02" not in detailed_text

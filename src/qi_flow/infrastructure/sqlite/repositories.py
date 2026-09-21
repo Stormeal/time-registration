@@ -54,6 +54,7 @@ def _session_from_row(row: sqlite3.Row) -> WorkSession:
         recovery_acknowledged_at=_read_stamp(row["recovery_acknowledged_at_utc"]),
         rounding_minutes=row["rounding_minutes"],
         testhuset_task_id=row["testhuset_task_id"],
+        dsb_allocation_id=row["dsb_allocation_id"],
     )
 
 
@@ -84,8 +85,9 @@ class SQLiteWorkSessionRepository:
             """INSERT INTO work_sessions (
                 id, actual_started_at_utc, actual_ended_at_utc, effective_started_at_utc,
                 effective_ended_at_utc, source, revision, created_at_utc, updated_at_utc,
-                deleted_at_utc, recovery_acknowledged_at_utc, rounding_minutes, testhuset_task_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                deleted_at_utc, recovery_acknowledged_at_utc, rounding_minutes, testhuset_task_id,
+                dsb_allocation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             self._values(session),
         )
 
@@ -107,7 +109,7 @@ class SQLiteWorkSessionRepository:
             """UPDATE work_sessions SET actual_started_at_utc=?, actual_ended_at_utc=?,
             effective_started_at_utc=?, effective_ended_at_utc=?, source=?, revision=?,
             created_at_utc=?, updated_at_utc=?, deleted_at_utc=?, recovery_acknowledged_at_utc=?,
-            rounding_minutes=?, testhuset_task_id=?
+            rounding_minutes=?, testhuset_task_id=?, dsb_allocation_id=?
             WHERE id=?""",
             (*self._values(session)[1:], session.id),
         )
@@ -119,6 +121,10 @@ class SQLiteWorkSessionRepository:
             AND (actual_ended_at_utc IS NULL OR actual_ended_at_utc > ?)""",
             (_stamp(end), _stamp(start)),
         ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
+    def list_all(self) -> list[WorkSession]:
+        rows = self._connection.execute("SELECT * FROM work_sessions").fetchall()
         return [_session_from_row(row) for row in rows]
 
     @staticmethod
@@ -137,6 +143,7 @@ class SQLiteWorkSessionRepository:
             _stamp(session.recovery_acknowledged_at),
             session.rounding_minutes,
             session.testhuset_task_id,
+            session.dsb_allocation_id,
         )
 
 
@@ -182,6 +189,10 @@ class SQLiteDeductionRepository:
             "SELECT * FROM deductions WHERE session_id=? ORDER BY actual_started_at_utc",
             (session_id,),
         ).fetchall()
+        return [_deduction_from_row(row) for row in rows]
+
+    def list_all(self) -> list[Deduction]:
+        rows = self._connection.execute("SELECT * FROM deductions").fetchall()
         return [_deduction_from_row(row) for row in rows]
 
     @staticmethod
@@ -230,6 +241,18 @@ class SQLiteDayDetailsRepository:
             revision=excluded.revision, updated_at_utc=CURRENT_TIMESTAMP""",
             (details.work_date.isoformat(), details.location, details.note, details.revision),
         )
+
+    def list_all(self) -> list[DayDetails]:
+        rows = self._connection.execute("SELECT * FROM day_details").fetchall()
+        return [
+            DayDetails(
+                date.fromisoformat(row["work_date"]),
+                WorkLocation(row["location"]),
+                row["note"],
+                row["revision"],
+            )
+            for row in rows
+        ]
 
 
 class SQLiteSettingsRepository:

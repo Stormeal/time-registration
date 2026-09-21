@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import cast
 
 from PySide6.QtCore import Qt, QTime
 from PySide6.QtWidgets import (
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from qi_flow.application.dto import (
+    UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
     UpdateDeductionCommand,
     UpdateWorkSessionCommand,
@@ -34,7 +34,7 @@ from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
 
 class SessionEditorDialog(QDialog):
-    """Edit completed exact-minute records for one selected timesheet date."""
+    """Edit one selected day's records, including a running session's start time."""
 
     def __init__(
         self,
@@ -113,6 +113,13 @@ class SessionEditorDialog(QDialog):
                         label, deduction, deduction.actual_started_at, deduction.actual_ended_at
                     )
                 )
+        active_session = self._service.active_session_for_day(self._work_date)
+        if active_session is not None:
+            self._tree.addTopLevelItem(
+                self._item(
+                    "Work session (running)", active_session, active_session.actual_started_at, None
+                )
+            )
         self._tree.expandAll()
 
     def _item(
@@ -127,7 +134,8 @@ class SessionEditorDialog(QDialog):
         enabled = selected is not None
         self._task.setEnabled(isinstance(selected, WorkSession))
         self._save_task.setEnabled(isinstance(selected, WorkSession))
-        self._add_lunch.setEnabled(isinstance(selected, WorkSession))
+        is_running_session = isinstance(selected, WorkSession) and selected.is_active
+        self._add_lunch.setEnabled(isinstance(selected, WorkSession) and not is_running_session)
         if isinstance(selected, WorkSession):
             index = self._task.findData(selected.testhuset_task_id)
             if index < 0:
@@ -139,20 +147,28 @@ class SessionEditorDialog(QDialog):
         self._save.setEnabled(enabled)
         self._delete.setEnabled(enabled)
         self._start.setEnabled(enabled)
-        self._end.setEnabled(enabled)
-        if selected is not None and selected.actual_ended_at is not None:
+        self._end.setEnabled(enabled and not is_running_session)
+        if selected is not None:
             self._start.setTime(self._as_qtime(selected.actual_started_at))
+        if selected is not None and selected.actual_ended_at is not None:
             self._end.setTime(self._as_qtime(selected.actual_ended_at))
 
     def _save_selected(self) -> None:
         selected = self._selected_value()
         if selected is None:
             return
-        start = self._as_copenhagen(self._start.time())
-        end = self._as_copenhagen(self._end.time())
+        start = self._as_copenhagen(self._work_date, self._start.time())
+        end = self._as_copenhagen(self._work_date, self._end.time())
         try:
             if isinstance(selected, WorkSession):
-                self._service.update_work_session(UpdateWorkSessionCommand(selected.id, start, end))
+                if selected.is_active:
+                    self._service.update_active_work_start(
+                        UpdateActiveWorkStartCommand(selected.id, start)
+                    )
+                else:
+                    self._service.update_work_session(
+                        UpdateWorkSessionCommand(selected.id, start, end)
+                    )
             else:
                 self._service.update_deduction(UpdateDeductionCommand(selected.id, start, end))
         except DomainError as error:
@@ -220,8 +236,10 @@ class SessionEditorDialog(QDialog):
     def _time(value: datetime | None) -> str:
         return value.astimezone(COPENHAGEN).strftime("%H:%M") if value else ""
 
-    def _as_copenhagen(self, value: QTime) -> datetime:
-        return datetime.combine(self._work_date, cast(time, value.toPython()), tzinfo=COPENHAGEN)
+    @staticmethod
+    def _as_copenhagen(work_date: date, value: QTime) -> datetime:
+        """Use the minute shown in the editor; hidden QTime seconds are not an input."""
+        return datetime.combine(work_date, time(value.hour(), value.minute()), tzinfo=COPENHAGEN)
 
     @staticmethod
     def _as_qtime(value: datetime) -> QTime:

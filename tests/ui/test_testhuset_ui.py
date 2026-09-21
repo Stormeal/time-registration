@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
-from PySide6.QtCore import Qt, QTime
+from PySide6.QtCore import QDate, Qt, QTime
 
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
@@ -42,6 +42,14 @@ def build(tmp_path):
         )
     )
     return service, tracking, session, task
+
+
+def test_hidden_seconds_are_not_saved_from_minute_only_editors() -> None:
+    manual = ManualEntryDialog._as_copenhagen(QDate(2026, 9, 20), QTime(15, 0, 45))
+    correction = SessionEditorDialog._as_copenhagen(date(2026, 9, 20), QTime(17, 0, 30))
+
+    assert manual == datetime(2026, 9, 20, 15, 0, tzinfo=COPENHAGEN)
+    assert correction == datetime(2026, 9, 20, 17, 0, tzinfo=COPENHAGEN)
 
 
 def test_override_save_is_independent_of_time_correction(qtbot, tmp_path) -> None:
@@ -98,6 +106,7 @@ def test_decimal_column_and_iso_week_group_selection(qtbot, tmp_path) -> None:
     page._tree.setCurrentItem(group)
     assert page._selected_week == IsoWeek(2026, 38)
     assert group.child(0).text(page._COLUMNS.index("Decimal hours")) == "7.75"
+    assert page._testhuset_button.text() == "Review & insert EazyProject hours — week 38, 2026"
 
 
 def test_double_clicking_a_day_opens_its_session_editor(qtbot, tmp_path, monkeypatch) -> None:

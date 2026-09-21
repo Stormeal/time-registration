@@ -30,7 +30,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R07 | Share one synchronized timesheet across the work laptop and personal desktop. | Not started |
 | R08 | Use a private Google Sheet as shared storage; synchronize at application opening and closing. | Not started |
 | R09 | Provide button-driven weekly registration to Testhuset at https://testhuset.eazyproject.net/dashboard.aspx. | Not started |
-| R10 | Provide button-driven weekly registration to DSB through the installed SAP Logon application. | Not started |
+| R10 | Provide button-driven weekly registration to DSB through the installed SAP Logon application. | In progress |
 | R11 | Python is the preferred language following discussion. | Not started |
 | R12 | Persist requirements and design for review across sessions; approval precedes user stories and development. | Complete |
 | R13 | Use the existing timesheet workbook for synchronized storage while preserving its current monthly sheets, formulas, and formatting. | Not started |
@@ -40,7 +40,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R17 | Closing the main window minimizes Worktime to the system tray without ending an active work or lunch interval. Exiting the application requires right-clicking the tray icon and choosing **Close app**. | Not started |
 | R18 | While lunch is active, only **End lunch** ends the lunch interval. **Finish work** is unavailable until lunch has ended. | Not started |
 | R19 | The monthly timesheet is a list grouped by calendar week number. | Not started |
-| R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Live timers use actual time; completed entries use rounded effective times. Manual entries accept exact minutes. | Not started |
+| R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Timer-created work starts round down and finishes round up; completed lunch boundaries use nearest rounding. Live timers use actual time, completed entries use rounded effective times, and manual entries accept exact minutes. | Complete |
 | R21 | Detect unfinished previous-day sessions and long Windows sleep intervals, requiring the user to resolve ambiguous time before further timer actions. | Not started |
 | R22 | Support multiple lunch intervals and deducted sleep-break intervals within one continuous work session. | Not started |
 | R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Not started |
@@ -59,6 +59,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R36 | Let each user choose a default Testhuset task and apply per-session overrides from the latest scanned task list. | Complete |
 | R37 | Preview and explicitly confirm Testhuset weekly timesheet fills, write two-decimal period-separated hours, resolve differing existing values per slot, verify saves, and leave week closure manual. | Complete |
 | R38 | Show each Timesheet day’s rounded net duration as period-separated decimal hours for Testhuset review. | Complete |
+| R39 | Let the user choose which scanned Testhuset project/task branches count toward DSB registration. DSB preview and fill exclude sessions assigned to all other branches while preserving them in QI Flow and Testhuset totals. | Not started |
 
 ### Example calculation
 
@@ -133,6 +134,19 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
 - 2026-09-17: v0.1.1 fixes completion of short timer lunches, lets a selected completed session
   receive a manual lunch deduction from its editor, and keeps Today’s sleep threshold aligned with
   saved Settings.
+- 2026-09-17: v0.2.0 authorizes optional Google Sheets synchronization. The user supplies a private
+  Sheet URL and desktop OAuth client ID; OAuth authorization occurs locally on every machine.
+- 2026-09-19: DSB weekly registration is authorized with an explicit per-day review and DSB
+  **Send** action. Week approval/locking remains manual; live DSB verification is still required.
+- 2026-09-20: v0.2.1 bundles the Google Sheets OAuth and API dependencies in the Windows
+  installer; this fixes Google authorization on packaged installations.
+- 2026-09-20: Timer-created work sessions use outward rounding: start rounds down and finish
+  rounds up to the configured boundary. Lunch deductions retain nearest-boundary rounding.
+- 2026-09-20: DSB hours are limited by a user-managed allowlist of scanned Testhuset branches.
+  Sessions assigned to other or unresolved branches remain recorded but are excluded from DSB.
+- 2026-09-20: Google sync reads and merges the structured tab before writing it. A fresh machine
+  imports completed work sessions and deductions rather than clearing remote history; divergent
+  records at the same revision stop synchronization instead of being silently overwritten.
 - Future sessions: read this file and `DESIGN.md` first; update decisions and statuses explicitly. Do not infer approval from the existence of these documents.
 
 ## Epic I delivery — 17/09/2026

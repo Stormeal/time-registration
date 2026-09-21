@@ -33,7 +33,7 @@ def test_initialize_applies_initial_schema(tmp_path: Path) -> None:
         "settings",
         "audit_entries",
     } <= tables
-    assert [row["version"] for row in migrations] == [1, 2, 3, 4]
+    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5]
 
 
 def test_transaction_rolls_back_on_failure(tmp_path: Path) -> None:

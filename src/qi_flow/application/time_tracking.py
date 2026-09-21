@@ -21,6 +21,7 @@ from qi_flow.application.dto import (
     SleepGapView,
     StartDeductionCommand,
     StartWorkCommand,
+    UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
     UpdateDeductionCommand,
     UpdateWorkSessionCommand,
@@ -49,6 +50,7 @@ from qi_flow.domain.time_rules import (
     VALID_ROUNDING_MINUTES,
     began_on_previous_local_day,
     effective_interval,
+    effective_work_interval,
     net_seconds,
     split_at_local_midnight,
 )
@@ -149,6 +151,36 @@ class TimeTrackingApplicationService:
             session.effective_started_at = start
             session.effective_ended_at = end
             session.source = EntrySource.MANUAL
+            session.updated_at = now
+            session.revision += 1
+            uow.sessions.save(session)
+        return session
+
+    def update_active_work_start(self, command: UpdateActiveWorkStartCommand) -> WorkSession:
+        """Correct a running session's start without stopping its timer."""
+        start = self._when(command.started_at)
+        now = self._when(None)
+        if start >= now:
+            raise InvalidIntervalError("The corrected start time must be before now.")
+        with self._uow_factory() as uow:
+            session = uow.sessions.get(command.session_id)
+            if session is None or session.deleted_at is not None or not session.is_active:
+                raise InvalidStateTransitionError("Choose the running work session to correct.")
+            self._ensure_session_has_no_overlap(uow, start, now, session.id)
+            deductions = uow.deductions.list_for_session(session.id)
+            if any(
+                deduction.deleted_at is None and deduction.actual_started_at < start
+                for deduction in deductions
+            ):
+                raise InvalidIntervalError(
+                    "The work session must still contain all of its lunches and breaks."
+                )
+            self._record_session_audit(uow, session, "update", now)
+            session.actual_started_at = start
+            session.effective_started_at = None
+            session.effective_ended_at = None
+            session.source = EntrySource.MANUAL
+            session.rounding_minutes = 1
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
@@ -293,6 +325,14 @@ class TimeTrackingApplicationService:
         with self._uow_factory() as uow:
             sessions = uow.sessions.list_intersecting(start, end)
         return [session for session in sessions if session.actual_ended_at is not None]
+
+    def active_session_for_day(self, work_date: date) -> WorkSession | None:
+        """Return the running session when it started on this Copenhagen calendar day."""
+        with self._uow_factory() as uow:
+            session = uow.sessions.get_active()
+        if session is None or session.actual_started_at.astimezone(COPENHAGEN).date() != work_date:
+            return None
+        return session
 
     def completed_deductions(self, session_id: SessionId) -> list[Deduction]:
         """Return completed, non-deleted deductions for the correction editor."""
@@ -830,7 +870,9 @@ class TimeTrackingApplicationService:
         return ActiveStateView(None, None, None, None, 0)
 
     def _complete_session(self, session: WorkSession, now: datetime) -> None:
-        start, end = effective_interval(session.actual_started_at, now, session.rounding_minutes)
+        start, end = effective_work_interval(
+            session.actual_started_at, now, session.rounding_minutes
+        )
         session.actual_ended_at = now
         session.effective_started_at = start
         session.effective_ended_at = end

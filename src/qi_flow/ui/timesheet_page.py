@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import DaySummaryView
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
@@ -48,11 +49,15 @@ class TimesheetPage(QWidget):
         service: TimeTrackingApplicationService,
         testhuset: TesthusetService | None = None,
         sheet_factory: SheetFactory | None = None,
+        dsb: DsbService | None = None,
+        dsb_sheet_factory: SheetFactory | None = None,
     ) -> None:
         super().__init__()
         self._service = service
         self._testhuset = testhuset
         self._sheet_factory = sheet_factory
+        self._dsb = dsb
+        self._dsb_sheet_factory = dsb_sheet_factory
         today = datetime.now(COPENHAGEN).date()
         self._year, self._month = today.year, today.month
         self._selected_week: IsoWeek | None = None
@@ -98,11 +103,17 @@ class TimesheetPage(QWidget):
         layout.addWidget(self._target_hours)
         layout.addWidget(self._add_entry)
         layout.addWidget(self._edit_sessions)
-        self._testhuset_button = QPushButton("Preview Testhuset week")
+        self._testhuset_button = QPushButton("Review & insert EazyProject hours")
         self._testhuset_button.setEnabled(False)
         self._testhuset_button.clicked.connect(self._open_testhuset)
         if testhuset is not None and sheet_factory is not None:
             layout.addWidget(self._testhuset_button)
+        self._dsb_button = QPushButton("Review & insert DSB hours")
+        self._dsb_button.setEnabled(False)
+        self._dsb_button.setVisible(dsb is not None and dsb.is_enabled())
+        self._dsb_button.clicked.connect(self._open_dsb)
+        if dsb is not None and dsb_sheet_factory is not None:
+            layout.addWidget(self._dsb_button)
         self.refresh()
 
     def refresh(self) -> None:
@@ -162,6 +173,14 @@ class TimesheetPage(QWidget):
     def _show_week(self, iso_week: IsoWeek) -> None:
         self._selected_week = iso_week
         self._testhuset_button.setEnabled(True)
+        self._testhuset_button.setText(
+            f"Review & insert EazyProject hours — week {iso_week.week}, {iso_week.year}"
+        )
+        if self._dsb is not None:
+            self._dsb_button.setText(
+                f"Review & insert DSB hours — week {iso_week.week}, {iso_week.year}"
+            )
+            self.refresh_dsb_availability()
         progress = self._service.weekly_progress(iso_week)
         decimal = progress.logged_seconds / 3600
         difference = progress.difference_seconds
@@ -207,6 +226,21 @@ class TimesheetPage(QWidget):
             dialog = TesthusetDialog(self._testhuset, self._sheet_factory, self._selected_week)
             dialog.exec()
 
+    def _open_dsb(self) -> None:
+        if (
+            self._selected_week
+            and self._dsb is not None
+            and self._dsb_sheet_factory is not None
+            and self._dsb.is_enabled()
+        ):
+            TesthusetDialog(self._dsb, self._dsb_sheet_factory, self._selected_week).exec()
+
+    def refresh_dsb_availability(self) -> None:
+        """Show the DSB action only after the user has explicitly opted in."""
+        enabled = self._dsb is not None and self._dsb.is_enabled()
+        self._dsb_button.setVisible(enabled)
+        self._dsb_button.setEnabled(enabled and self._selected_week is not None)
+
     def _change_month(self, offset: int) -> None:
         target = self._year * 12 + self._month - 1 + offset
         self._year, month_index = divmod(target, 12)
@@ -214,6 +248,7 @@ class TimesheetPage(QWidget):
         self._selected_week = None
         self._selected_date = None
         self._testhuset_button.setEnabled(False)
+        self._dsb_button.setEnabled(False)
         self._edit_sessions.setEnabled(False)
         self._week_summary.setText("Select a day to review its ISO week.")
         self._target_hours.setEnabled(False)

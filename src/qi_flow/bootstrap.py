@@ -16,10 +16,14 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from qi_flow import __version__
+from qi_flow.application.dsb import DsbService
+from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
+from qi_flow.infrastructure.dsb_browser import temporary_sheet as temporary_dsb_sheet
+from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.logging import configure_logging
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.single_instance import SingleInstanceGuard
@@ -130,6 +134,12 @@ def run(argv: list[str] | None = None) -> int:
     backups.ensure_daily_backup()
     startup_manager = create_startup_manager()
     credentials = WindowsCredentialStore()
+    dsb = DsbService(
+        lambda: SQLiteUnitOfWork(context.database),
+        SystemClock(),
+        UuidIdentifierGenerator(),
+        JsonTaskCache(context.paths.data_dir / "dsb-allocations.json"),
+    )
     window = MainWindow(
         service,
         backups,
@@ -144,6 +154,10 @@ def run(argv: list[str] | None = None) -> int:
         ),
         partial(temporary_sheet, credentials=credentials),
         credentials,
+        dsb,
+        temporary_dsb_sheet,
+        GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock()),
+        GoogleOAuthStore(),
     )
     preferences = service.app_preferences()
     if preferences.theme == "dark":

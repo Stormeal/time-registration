@@ -67,16 +67,16 @@ class TesthusetWorker(QThread):
                     message = (
                         f"Verified {result.changed} changed slots; kept {result.kept}; "
                         f"{result.matched} already matched. Closing the week remains a manual "
-                        "Testhuset action."
+                        f"{self.service.destination} action."
                     )
             self.outcome.emit(message)
         except ValueError as error:
             self.outcome.emit(str(error))
         except Exception as error:
             # Do not expose external/browser errors or work contents in diagnostics.
-            _LOG.warning("Testhuset operation failed (%s)", type(error).__name__)
+            _LOG.warning("%s operation failed (%s)", self.service.destination, type(error).__name__)
             self.outcome.emit(
-                "Testhuset operation failed before a preview could be prepared. "
+                f"{self.service.destination} operation failed before a preview could be prepared. "
                 "Check the QI Flow diagnostic log for the failure type, then rescan."
             )
 
@@ -93,16 +93,16 @@ class TesthusetDialog(QDialog):
         scan_only: bool = False,
     ) -> None:
         super().__init__()
-        self.setWindowTitle(f"Testhuset — week {week.week}, {week.year}")
+        self.setWindowTitle(f"{service.destination} — week {week.week}, {week.year}")
         self.resize(900, 520)
         self._status = QLabel("Opening a temporary browser…")
         self._status.setWordWrap(True)
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
-            ("Date", "Project / task", "QI Flow hours", "Testhuset hours", "Decision")
+            ("Date", "Project / task", "QI Flow hours", f"{service.destination} hours", "Decision")
         )
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._fill = QPushButton("Fill Testhuset timesheet")
+        self._fill = QPushButton(f"Fill {service.destination} timesheet")
         self._fill.setEnabled(False)
         self._fill.clicked.connect(self._confirm)
         self._cancel = QPushButton("Cancel")
@@ -143,7 +143,7 @@ class TesthusetDialog(QDialog):
             else:
                 choice = QComboBox()
                 choice.addItem("Replace with QI Flow value", True)
-                choice.addItem("Keep Testhuset value", False)
+                choice.addItem(f"Keep {self._worker.service.destination} value", False)
                 choice.currentIndexChanged.connect(self._validate_choices)
                 self._choices[row] = choice
                 self._table.setCellWidget(row, 4, choice)

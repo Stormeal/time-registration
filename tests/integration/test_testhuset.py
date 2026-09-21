@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import (
     ManualDeductionCommand,
     ManualWorkSessionCommand,
@@ -50,6 +51,15 @@ class Sheet:
             raise ValueError("Uncertain save")
         self.writes.append(slot)
         self.values[(slot.work_date, slot.task.id)] = slot.hours
+
+
+class DsbSheet(Sheet):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commits = 0
+
+    def commit_verified(self) -> None:
+        self.commits += 1
 
 
 @pytest.fixture
@@ -196,6 +206,23 @@ def test_uncertain_save_stops_without_retry(setup) -> None:
     with pytest.raises(ValueError, match="Uncertain"):
         service.fill(sheet, preview, frozenset({0}), confirmed=True)
     assert not sheet.writes
+
+
+def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
+    tracking, _, _, database, cache = setup
+    ids = UuidIdentifierGenerator()
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    sheet = DsbSheet()
+    dsb.scan(sheet, WEEK)
+    dsb.set_default(TASK.id)
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+
+    preview = dsb.preview(sheet, WEEK)
+    result = dsb.fill(sheet, preview, frozenset({0}), confirmed=True)
+
+    assert result.changed == 1
+    assert len(sheet.writes) == 1
+    assert sheet.commits == 1
 
 
 def test_upgrade_preserves_existing_sessions(tmp_path: Path) -> None:

@@ -58,6 +58,14 @@ class UpdateWorkSessionCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class UpdateActiveWorkStartCommand:
+    """Correct the start of the currently running work session."""
+
+    session_id: SessionId
+    started_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateDeductionCommand:
     deduction_id: DeductionId
     started_at: datetime

@@ -4,8 +4,8 @@ QI Flow is a local-first Windows work-time tracker. Iteration 1 records work ses
 lunches, daily context, and weekly/monthly totals in a local SQLite database. Epic I adds
 user-confirmed Testhuset weekly fills. Google Sheets and SAP integrations remain deferred.
 
-Product behavior is tracked in [USER_STORIES.md](USER_STORIES.md). The first P0 tracking slice is
-implemented; remaining iteration-1 stories are still planned.
+Active product work is tracked in [USER_STORIES.md](USER_STORIES.md). Completed stories and their
+acceptance criteria are preserved in [USER_STORIES_ARCHIVE.md](USER_STORIES_ARCHIVE.md).
 
 ## Requirements
 
@@ -69,7 +69,8 @@ private Windows application-data folder.
 
 - [REQUIREMENTS.md](REQUIREMENTS.md): stable product requirements and delivery scope.
 - [DECISIONS.md](DECISIONS.md): confirmed product decisions from the design interview.
-- [USER_STORIES.md](USER_STORIES.md): prioritized iteration 1 stories and acceptance criteria.
+- [USER_STORIES.md](USER_STORIES.md): unfinished stories and current release acceptance.
+- [USER_STORIES_ARCHIVE.md](USER_STORIES_ARCHIVE.md): completed stories and the historical register.
 - [DESIGN.md](DESIGN.md): interface direction and interaction model.
 - [ARCHITECTURE.md](ARCHITECTURE.md): module boundaries, dependency rules, data model, and handoff.
 - [AGENTS.md](AGENTS.md): working conventions for implementation agents.

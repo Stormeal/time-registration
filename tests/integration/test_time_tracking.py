@@ -15,6 +15,7 @@ from qi_flow.application.dto import (
     ReminderSettingsView,
     StartDeductionCommand,
     StartWorkCommand,
+    UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
@@ -89,6 +90,27 @@ def test_work_and_multiple_lunches_persist_with_actual_and_rounded_boundaries(
     assert deductions[0].effective_ended_at == datetime(2026, 9, 15, 10, 35, tzinfo=UTC)
 
 
+def test_running_session_start_can_be_corrected_without_stopping_timer(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 9, 0, tzinfo=UTC)
+    service, _, database = build_service(tmp_path, now)
+    service.start_work(StartWorkCommand())
+
+    service.update_active_work_start(
+        UpdateActiveWorkStartCommand(
+            SessionId("session-1"), datetime(2026, 9, 15, 8, 15, tzinfo=UTC)
+        )
+    )
+
+    with SQLiteUnitOfWork(database) as uow:
+        session = uow.sessions.get(SessionId("session-1"))
+    assert session is not None
+    assert session.is_active
+    assert session.actual_started_at == datetime(2026, 9, 15, 8, 15, tzinfo=UTC)
+    assert session.effective_started_at is None
+    assert session.effective_ended_at is None
+    assert session.rounding_minutes == 1
+
+
 def test_short_rounded_lunch_finishes_with_its_actual_known_duration(tmp_path: Path) -> None:
     at = datetime(2026, 9, 15, 7, 2, tzinfo=UTC)
     service, clock, database = build_service(tmp_path, at)
@@ -139,6 +161,23 @@ def test_changing_rounding_only_affects_future_actions(tmp_path: Path) -> None:
     assert first is not None and second is not None
     assert first.rounding_minutes == 5
     assert second.rounding_minutes == 15
+
+
+def test_timer_work_rounds_start_down_and_finish_up(tmp_path: Path) -> None:
+    service, clock, database = build_service(tmp_path, datetime(2026, 9, 15, 7, 5, tzinfo=UTC))
+    service.set_rounding_minutes(15)
+    service.start_work(StartWorkCommand())
+    clock.value = datetime(2026, 9, 15, 16, 10, tzinfo=UTC)
+
+    service.finish_work(FinishWorkCommand())
+
+    with SQLiteUnitOfWork(database) as uow:
+        session = uow.sessions.get(SessionId("session-1"))
+    assert session is not None
+    assert session.actual_started_at == datetime(2026, 9, 15, 7, 5, tzinfo=UTC)
+    assert session.actual_ended_at == datetime(2026, 9, 15, 16, 10, tzinfo=UTC)
+    assert session.effective_started_at == datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    assert session.effective_ended_at == datetime(2026, 9, 15, 16, 15, tzinfo=UTC)
 
 
 def test_start_and_finish_timer_actions_can_be_undone_for_30_seconds(tmp_path: Path) -> None:

@@ -73,7 +73,10 @@ class TodayPage(QWidget):
         for minutes in (1, 5, 10, 15):
             self._rounding.addItem(f"{minutes} minutes", minutes)
         self._rounding.setCurrentIndex((1, 5, 10, 15).index(service.rounding_minutes))
-        self._rounding.setToolTip("Rounds future timer-created completed intervals to this value.")
+        self._rounding.setToolTip(
+            "Rounds timer work starts down and finishes up to this boundary. "
+            "Completed lunch boundaries use nearest rounding."
+        )
         self._sleep_enabled = QCheckBox("Detect long Windows sleep")
         self._sleep_enabled.setToolTip(
             "Prompts you to resolve a Windows sleep gap. QI Flow never removes time automatically."

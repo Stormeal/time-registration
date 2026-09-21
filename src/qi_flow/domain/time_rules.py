@@ -30,6 +30,36 @@ def round_to_nearest_interval(value: datetime, minutes: int) -> datetime:
     return datetime.fromtimestamp(rounded_seconds, UTC)
 
 
+def round_down_to_interval(value: datetime, minutes: int) -> datetime:
+    """Round an aware timestamp down to the previous configured boundary."""
+    _validate_rounding(value, minutes)
+    interval_seconds = minutes * 60
+    epoch_seconds = int(value.astimezone(UTC).timestamp())
+    return datetime.fromtimestamp((epoch_seconds // interval_seconds) * interval_seconds, UTC)
+
+
+def round_up_to_interval(value: datetime, minutes: int) -> datetime:
+    """Round an aware timestamp up to the next configured boundary."""
+    _validate_rounding(value, minutes)
+    interval_seconds = minutes * 60
+    epoch_seconds = int(value.astimezone(UTC).timestamp())
+    return datetime.fromtimestamp(
+        ((epoch_seconds + interval_seconds - 1) // interval_seconds) * interval_seconds,
+        UTC,
+    )
+
+
+def effective_work_interval(
+    start: datetime, end: datetime, minutes: int
+) -> tuple[datetime, datetime]:
+    """Round timer-created work outwards so the recorded span contains the actual span."""
+    rounded_start = round_down_to_interval(start, minutes)
+    rounded_end = round_up_to_interval(end, minutes)
+    if rounded_end <= rounded_start:
+        raise InvalidIntervalError("rounding produced a zero-length interval; correct the times")
+    return rounded_start, rounded_end
+
+
 def effective_interval(start: datetime, end: datetime, minutes: int) -> tuple[datetime, datetime]:
     """Return rounded boundaries, rejecting an interval that rounding removes."""
     rounded_start = round_to_nearest_interval(start, minutes)
@@ -37,6 +67,13 @@ def effective_interval(start: datetime, end: datetime, minutes: int) -> tuple[da
     if rounded_end <= rounded_start:
         raise InvalidIntervalError("rounding produced a zero-length interval; correct the times")
     return rounded_start, rounded_end
+
+
+def _validate_rounding(value: datetime, minutes: int) -> None:
+    if minutes not in VALID_ROUNDING_MINUTES:
+        raise ValueError("rounding must be one of 1, 5, 10, or 15 minutes")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
 
 
 def net_seconds(session: WorkSession, deductions: list[Deduction], now: datetime) -> int:

@@ -84,24 +84,31 @@ class TesthusetService:
         clock: Clock,
         identifiers: IdentifierGenerator,
         cache: TaskCache,
+        *,
+        destination: str = "Testhuset",
+        settings_prefix: str = "testhuset",
+        assignment_attribute: str = "testhuset_task_id",
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock
         self._identifiers = identifiers
         self._cache = cache
+        self.destination = destination
+        self._settings_prefix = settings_prefix
+        self._assignment_attribute = assignment_attribute
 
     def tasks(self) -> tuple[ProjectTask, ...]:
         return self._cache.load()
 
     def default_task_id(self) -> str | None:
         with self._uow_factory() as uow:
-            value = uow.settings.get("testhuset_default_task")
+            value = uow.settings.get(f"{self._settings_prefix}_default_task")
         return value if isinstance(value, str) else None
 
     def set_default(self, task_id: str) -> None:
         self._require_task(task_id)
         with self._uow_factory() as uow:
-            uow.settings.save("testhuset_default_task", task_id, self._clock.now())
+            uow.settings.save(f"{self._settings_prefix}_default_task", task_id, self._clock.now())
 
     def assign(self, session_id: SessionId, task_id: str | None) -> None:
         if task_id is not None:
@@ -110,7 +117,7 @@ class TesthusetService:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise ValueError("Choose a completed work session before assigning a task.")
-            if session.testhuset_task_id == task_id:
+            if getattr(session, self._assignment_attribute) == task_id:
                 return
             now = self._clock.now()
             uow.audit.record(
@@ -121,19 +128,23 @@ class TesthusetService:
                 TimeTrackingApplicationService._session_snapshot(session),
                 now,
             )
-            session.testhuset_task_id = task_id
+            setattr(session, self._assignment_attribute, task_id)
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
 
     def _require_task(self, task_id: str) -> None:
         if task_id not in {task.id for task in self.tasks()}:
-            raise ValueError("Choose a current Testhuset task from the latest scan.")
+            raise ValueError(
+                f"Choose a current {self.destination} allocation from the latest scan."
+            )
 
     def scan(self, sheet: WeeklySheet, week: IsoWeek) -> tuple[ProjectTask, ...]:
         tasks = sheet.scan(week)
         if len({task.id for task in tasks}) != len(tasks):
-            raise ValueError("Testhuset returned duplicate task identifiers; scan cancelled.")
+            raise ValueError(
+                f"{self.destination} returned duplicate allocation identifiers; scan cancelled."
+            )
         self._cache.replace(tasks)
         return tasks
 
@@ -145,7 +156,10 @@ class TesthusetService:
         tasks = {task.id: task for task in self.tasks()}
         default = self.default_task_id()
         if default not in tasks:
-            raise ValueError("Select a current default Testhuset task in Settings before filling.")
+            raise ValueError(
+                f"Select a current default {self.destination} allocation in Settings before "
+                "filling."
+            )
         totals: dict[tuple[date, str], int] = {}
         with self._uow_factory() as uow:
             # Include the rounding margin at week boundaries, then clip effective intervals.
@@ -160,7 +174,7 @@ class TesthusetService:
                     continue
                 if left >= end or right <= start:
                     continue
-                task_id = session.testhuset_task_id or default
+                task_id = getattr(session, self._assignment_attribute) or default
                 if task_id not in tasks:
                     raise ValueError("A session uses a removed task. Choose a current override.")
                 deductions = uow.deductions.list_for_session(session.id)
@@ -200,7 +214,9 @@ class TesthusetService:
         confirmed: bool,
     ) -> FillResult:
         if not confirmed:
-            raise ValueError("Confirm Fill Testhuset timesheet before changing any hours.")
+            raise ValueError(
+                f"Confirm Fill {self.destination} timesheet before changing any hours."
+            )
         if not replace <= set(range(len(preview.slots))):
             raise ValueError("Invalid conflict selection.")
         # Reconcile again before the first write; never apply an obsolete preview.

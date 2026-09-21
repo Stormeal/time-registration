@@ -223,6 +223,23 @@ def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
     assert result.changed == 1
     assert len(sheet.writes) == 1
     assert sheet.commits == 1
+    assert sheet.weeks == [WEEK]
+
+
+def test_dsb_preview_uses_the_cached_allocation_without_rescanning(setup) -> None:
+    tracking, _, _, database, cache = setup
+    ids = UuidIdentifierGenerator()
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    sheet = DsbSheet()
+    dsb.scan(sheet, WEEK)
+    dsb.set_default(TASK.id)
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    sheet.weeks.clear()
+
+    preview = dsb.preview(sheet, WEEK)
+
+    assert len(preview.slots) == 1
+    assert sheet.weeks == []
 
 
 def test_upgrade_preserves_existing_sessions(tmp_path: Path) -> None:

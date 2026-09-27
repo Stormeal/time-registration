@@ -1,6 +1,6 @@
 # QI Flow — archived user-story register
 
-Archived: 2026-09-19 · Historical snapshot of the original iteration register
+Archived: 2026-09-27 · Updated with completed Epic B stories
 
 This file preserves the original story definitions, acceptance criteria, and delivery notes. The
 current actionable backlog is maintained in `USER_STORIES.md`. Stories marked complete here are
@@ -15,7 +15,7 @@ These stories implement the confirmed local-only scope in `REQUIREMENTS.md` and 
 | --- | --- | --- |
 | Complete | US01–US04, US09–US20 | Implemented and covered by automated checks. |
 | Complete | US22–US24 | Implemented and covered by automated checks. |
-| In progress | US05–US08 | Core persistence exists; remaining interaction and edge-case work is tracked in the story. |
+| Complete | US05–US08 | Correction, history, daily context, and sleep recovery implemented and covered by automated checks. |
 | In progress | US21 | Installer configuration is ready; clean-account verification remains. |
 | Complete | US25–US27 | Epic I implemented and covered by automated checks; live first-fill and packaged smoke checks remain. |
 
@@ -82,7 +82,7 @@ Acceptance criteria:
 
 ### US05 — Add and edit time manually · P0
 
-Implementation status: **In progress** · manual intervals and validation exist; entry-editing UI remains.
+Implementation status: **Complete** · verified by integration and UI tests.
 
 As a consultant, I want to add or correct work and lunch intervals so that forgotten or inaccurate entries can be repaired.
 
@@ -97,7 +97,7 @@ Acceptance criteria:
 
 ### US06 — Delete, undo, and recover changes · P1
 
-Implementation status: **In progress** · soft deletion and 30-day audit recovery exist; history UI remains.
+Implementation status: **Complete** · verified by integration and UI tests.
 
 As a consultant, I want safe correction controls so that an accidental edit or deletion does not permanently destroy my record.
 
@@ -111,7 +111,7 @@ Acceptance criteria:
 
 ### US07 — Record daily context · P1
 
-Implementation status: **In progress** · office and note fields exist; cross-midnight context handling remains.
+Implementation status: **Complete** · verified by integration and UI tests.
 
 As a consultant, I want to mark office attendance and add a daily note so that the timesheet retains necessary context.
 
@@ -125,7 +125,7 @@ Acceptance criteria:
 
 ### US08 — Resolve Windows sleep · P1
 
-Implementation status: **In progress** · local sleep-gap resolution exists; remaining platform-hardening work remains.
+Implementation status: **Complete** · verified by integration and UI tests.
 
 As a consultant, I want to classify long computer sleep so that unattended time is not silently included or removed.
 
@@ -307,7 +307,8 @@ Acceptance criteria:
 - Logs retain approximately seven days and avoid notes and time-entry contents where possible.
 - Settings exposes the application-data path and Open log folder.
 - The live database path is standard per-user application data and cannot be relocated from the UI.
-- QI Flow performs no telemetry or automatic update checks.
+- QI Flow performs no telemetry. This archived update-check restriction is superseded by revised
+  requirement R30 and Epic G story US32, which authorize verified in-app updates.
 
 ### US21 — Install and upgrade on Windows · P2
 
@@ -523,5 +524,5 @@ Acceptance criteria:
 
 - Requirements and decision interview: approved.
 - User stories: awaiting review.
-- Development: US01–US04, US09–US20, and US22–US27 are implemented and verified; US05–US08
-  and US21 remain in progress.
+- Development: US01–US08, US09–US20, US22–US27 are implemented and verified; US21 and
+  US28–US30 remain in progress, and US31 has not started.

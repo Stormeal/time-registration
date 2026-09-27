@@ -12,7 +12,7 @@ This file records the shared understanding reached during the design interview. 
 | D002 | Iteration 1 is a local Windows application built with Python, PySide6, and SQLite. |
 | D003 | Google Sheets synchronization, cross-machine behavior, Testhuset, SAP, authentication, and workplace submission are deferred. |
 | D004 | The application installs for the current Windows user without requiring administrator rights. |
-| D005 | Iteration 1 has no telemetry and no automatic update mechanism. |
+| D005 | QI Flow has no telemetry. Verified application updates may be checked and applied from within QI Flow without requiring the user to manually download and run the installer for each release. Updates must preserve user data, require no administrator rights, and provide a safe recovery path if application-file replacement fails. The installer remains available for first installation and recovery. |
 
 ## Work, lunch, and time calculation
 
@@ -130,3 +130,9 @@ This file records the shared understanding reached during the design interview. 
   deductions remain nearest-rounded.
 - 2026-09-20: D103 adds a user-managed Testhuset-branch allowlist for DSB. The three currently
   identified Team Web, DSB branches can be selected, but are not hard-coded or inferred by name.
+- 2026-09-27: Epic B (US05–US08) completed. Timesheet details expose exact-version recovery,
+  timer undo covers work and lunch transitions, cross-midnight office context is copied per date,
+  and excluded sleep minutes do not overlap existing deductions.
+- 2026-09-27: D005 revised at the user's request: verified in-app updates are allowed; telemetry
+  remains excluded. Epic G US32 records update consent, package verification, data preservation,
+  and recovery acceptance criteria.

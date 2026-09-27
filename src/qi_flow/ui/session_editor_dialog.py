@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 
 from PySide6.QtCore import Qt, QTime
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QMessageBox,
     QPushButton,
+    QTextEdit,
     QTimeEdit,
     QTreeWidget,
     QTreeWidgetItem,
@@ -30,6 +32,7 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import Deduction, DeductionKind, WorkLocation, WorkSession
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.history_dialog import HistoryDialog
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
 
@@ -63,6 +66,8 @@ class SessionEditorDialog(QDialog):
         self._add_lunch = QPushButton("Add lunch")
         self._add_lunch.setEnabled(False)
         self._add_lunch.clicked.connect(self._add_lunch_to_selected_session)
+        self._history = QPushButton("View recoverable history")
+        self._history.clicked.connect(self._open_history)
         self._save.clicked.connect(self._save_selected)
         self._delete.clicked.connect(self._delete_selected)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -72,9 +77,12 @@ class SessionEditorDialog(QDialog):
         form.addRow("Finish", self._end)
         form.addRow(self._save, self._delete)
         self._office = QCheckBox("Worked from office")
-        self._save_office = QPushButton("Save office status")
+        self._note = QTextEdit()
+        self._note.setPlaceholderText("Daily note")
+        self._save_office = QPushButton("Save daily context")
         self._save_office.clicked.connect(self._save_office_status)
         form.addRow(self._office)
+        form.addRow("Note", self._note)
         form.addRow(self._save_office)
         self._task = QComboBox()
         self._task.addItem("Use configured default", None)
@@ -95,6 +103,7 @@ class SessionEditorDialog(QDialog):
         layout.addWidget(self._tree)
         layout.addLayout(form)
         layout.addWidget(self._add_lunch)
+        layout.addWidget(self._history)
         layout.addWidget(buttons)
         self._load_office_status()
         self._refresh()
@@ -102,6 +111,8 @@ class SessionEditorDialog(QDialog):
     def _refresh(self) -> None:
         self._tree.clear()
         for session in self._service.completed_sessions_for_day(self._work_date):
+            if session.actual_started_at.astimezone(COPENHAGEN).date() != self._work_date:
+                continue
             session_item = self._item(
                 "Work session", session, session.actual_started_at, session.actual_ended_at
             )
@@ -180,6 +191,15 @@ class SessionEditorDialog(QDialog):
         selected = self._selected_value()
         if selected is None:
             return
+        answer = QMessageBox.question(
+            self,
+            "Delete time entry?",
+            "Delete this entry from the timesheet? It can be restored from history for 30 days.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         try:
             if isinstance(selected, WorkSession):
                 self._service.delete_work_session(selected.id)
@@ -203,19 +223,58 @@ class SessionEditorDialog(QDialog):
         dialog.exec()
         self._refresh()
 
+    def _open_history(self) -> None:
+        dialog = HistoryDialog(self._service, self._work_date)
+        if dialog.exec():
+            self._refresh()
+
     def _load_office_status(self) -> None:
         details = self._service.day_details(self._work_date)
         self._office.setChecked(details is not None and details.location is WorkLocation.OFFICE)
+        self._note.setPlainText(details.note if details is not None else "")
 
     def _save_office_status(self) -> None:
-        details = self._service.day_details(self._work_date)
         self._service.update_day_details(
             UpdateDayDetailsCommand(
                 self._work_date,
                 WorkLocation.OFFICE if self._office.isChecked() else WorkLocation.REMOTE,
-                details.note if details is not None else "",
+                self._note.toPlainText(),
             )
         )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        event.ignore()
+        self.reject()
+
+    def reject(self) -> None:
+        details = self._service.day_details(self._work_date)
+        saved_office = details is not None and details.location is WorkLocation.OFFICE
+        saved_note = details.note if details is not None else ""
+        selected = self._selected_value()
+        dirty_interval = False
+        if selected is not None:
+            dirty_interval = self._as_copenhagen(
+                self._work_date, self._start.time()
+            ) != selected.actual_started_at or (
+                selected.actual_ended_at is not None
+                and self._as_copenhagen(self._work_date, self._end.time())
+                != selected.actual_ended_at
+            )
+        if (
+            self._office.isChecked() != saved_office
+            or self._note.toPlainText() != saved_note
+            or dirty_interval
+        ):
+            answer = QMessageBox.question(
+                self,
+                "Discard unsaved changes?",
+                "Your correction has unsaved changes. Discard them?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Discard:
+                return
+        super().reject()
 
     def _assign_task(self) -> None:
         selected = self._selected_value()

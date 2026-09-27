@@ -41,16 +41,16 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R18 | While lunch is active, only **End lunch** ends the lunch interval. **Finish work** is unavailable until lunch has ended. | Not started |
 | R19 | The monthly timesheet is a list grouped by calendar week number. | Not started |
 | R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Timer-created work starts round down and finishes round up; completed lunch boundaries use nearest rounding. Live timers use actual time, completed entries use rounded effective times, and manual entries accept exact minutes. | Complete |
-| R21 | Detect unfinished previous-day sessions and long Windows sleep intervals, requiring the user to resolve ambiguous time before further timer actions. | Not started |
-| R22 | Support multiple lunch intervals and deducted sleep-break intervals within one continuous work session. | Not started |
-| R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Not started |
+| R21 | Detect unfinished previous-day sessions and long Windows sleep intervals, requiring the user to resolve ambiguous time before further timer actions. | Complete |
+| R22 | Support multiple lunch intervals and deducted sleep-break intervals within one continuous work session. | Complete |
+| R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Complete |
 | R24 | Support optional Windows startup, single-instance behavior, a compact tray panel, and recovery-focused startup behavior. | Not started |
 | R25 | Provide configurable work and lunch reminders, defaulting to 9 elapsed hours and 45 lunch minutes, with user-selected snooze. | Not started |
 | R26 | Create daily SQLite backups, retain 30, support a selectable backup folder and guided restoration, and never replace an unreadable database silently. | In progress |
 | R27 | Use a 37-hour default weekly target with per-week overrides and neutral remaining/over-target feedback. | Not started |
 | R28 | Use English UI text with Danish formats, ISO Monday–Sunday weeks, Europe/Copenhagen time, and correct daylight-saving elapsed-time calculations. | Not started |
 | R29 | Export summary and detailed UTF-8 semicolon-separated CSV for a week, month, or all history, using Danish decimal commas. | Complete |
-| R30 | Install per Windows user without administrator rights, retain data indefinitely, keep limited privacy-safe local diagnostics, and include no telemetry or automatic updater in iteration 1. | In progress |
+| R30 | Install and update per Windows user without administrator rights. QI Flow may check for and install verified releases without requiring the user to manually download and run the installer for each update. Updates must preserve user data and support recovery if an update fails. Retain data indefinitely, keep limited privacy-safe local diagnostics, and include no telemetry. | In progress |
 | R31 | Allow completed work sessions and lunch/break deductions to be corrected from Timesheet using exact manual times, while preserving validation and 30-day recovery history. | Complete |
 | R32 | Provide concise English hover help for each configurable Today option, including explicit non-destructive sleep-detection behavior. | Complete |
 | R33 | Use a consistent, modern teal QI Flow icon in the app, tray, packaged executable, Start menu, and installer. | Complete |
@@ -144,6 +144,9 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
   rounds up to the configured boundary. Lunch deductions retain nearest-boundary rounding.
 - 2026-09-20: DSB hours are limited by a user-managed allowlist of scanned Testhuset branches.
   Sessions assigned to other or unresolved branches remain recorded but are excluded from DSB.
+- 2026-09-27: R30 revised at the user's request to permit verified in-app updates without a
+  manual installer download/run for each release. No telemetry remains in scope; Epic G US32
+  defines the updater acceptance criteria.
 - 2026-09-20: Google sync reads and merges the structured tab before writing it. A fresh machine
   imports completed work sessions and deductions rather than clearing remote history; divergent
   records at the same revision stop synchronization instead of being silently overwritten.

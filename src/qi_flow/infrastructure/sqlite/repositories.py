@@ -311,6 +311,33 @@ class SQLiteAuditRepository:
         ).fetchone()
         return json.loads(row["before_state_json"]) if row is not None else None
 
+    def list_active(self, as_of: datetime) -> list[dict[str, object]]:
+        rows = self._connection.execute(
+            """SELECT id, entity_type, entity_id, action, before_state_json, created_at_utc
+            FROM audit_entries WHERE expires_at_utc > ? ORDER BY created_at_utc DESC""",
+            (_stamp(as_of),),
+        ).fetchall()
+        return [self._history_row(row) for row in rows]
+
+    def get_active(self, audit_id: str, as_of: datetime) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT id, entity_type, entity_id, action, before_state_json, created_at_utc
+            FROM audit_entries WHERE id=? AND expires_at_utc > ?""",
+            (audit_id, _stamp(as_of)),
+        ).fetchone()
+        return self._history_row(row) if row is not None else None
+
+    @staticmethod
+    def _history_row(row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "audit_id": str(row["id"]),
+            "entity_type": str(row["entity_type"]),
+            "entity_id": str(row["entity_id"]),
+            "action": str(row["action"]),
+            "changed_at": datetime.fromisoformat(str(row["created_at_utc"])),
+            "before_state": json.loads(row["before_state_json"]),
+        }
+
 
 class SQLiteWeeklyTargetRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:

@@ -228,24 +228,14 @@ class TodayPage(QWidget):
         self.refresh()
 
     def _load_day_context(self) -> None:
-        work_date = self._service.active_state().actual_started_at
-        date_to_load = (
-            work_date.astimezone(COPENHAGEN).date()
-            if work_date
-            else datetime.now(COPENHAGEN).date()
-        )
+        date_to_load = datetime.now(COPENHAGEN).date()
         details = self._service.day_details(date_to_load)
         if details is not None:
             self._office.setChecked(details.location is WorkLocation.OFFICE)
             self._note.setPlainText(details.note)
 
     def _save_day_context(self) -> None:
-        work_date = self._service.active_state().actual_started_at
-        date_to_save = (
-            work_date.astimezone(COPENHAGEN).date()
-            if work_date
-            else datetime.now(COPENHAGEN).date()
-        )
+        date_to_save = datetime.now(COPENHAGEN).date()
         location = WorkLocation.OFFICE if self._office.isChecked() else WorkLocation.REMOTE
         self._service.update_day_details(
             UpdateDayDetailsCommand(date_to_save, location, self._note.toPlainText())
@@ -283,12 +273,15 @@ class TodayPage(QWidget):
         include = message.addButton("Include as work", QMessageBox.ButtonRole.AcceptRole)
         exclude = message.addButton("Exclude as break", QMessageBox.ButtonRole.DestructiveRole)
         decide_later = message.addButton("Decide later", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(decide_later)
         message.exec()
         if message.clickedButton() is include:
             self._service.resolve_sleep_gap("include")
         elif message.clickedButton() is exclude:
             self._service.resolve_sleep_gap("exclude")
-        elif message.clickedButton() is decide_later:
+        else:
+            # Choosing Decide later or closing the prompt must leave the unresolved
+            # interval pending without reopening a modal dialog every timer tick.
             self._sleep_deferred = True
         self.refresh()
 

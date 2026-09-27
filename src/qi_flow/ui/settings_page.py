@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -38,6 +39,7 @@ from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
+from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient, UpdateError
 from qi_flow.ui.testhuset_credentials_dialog import TesthusetCredentialsDialog
 from qi_flow.ui.testhuset_dialog import SheetFactory, TesthusetDialog
 
@@ -55,6 +57,38 @@ class GoogleSyncWorker(QThread):
             self.completed.emit(self._service.sync_completed_records())
         except Exception:
             self.failed.emit()
+
+
+class UpdateCheckWorker(QThread):
+    checked = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, client: ReleaseClient) -> None:
+        super().__init__()
+        self._client = client
+
+    def run(self) -> None:
+        try:
+            self.checked.emit(self._client.check())
+        except UpdateError as error:
+            self.failed.emit(str(error))
+
+
+class UpdateDownloadWorker(QThread):
+    downloaded = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, client: ReleaseClient, update: AvailableUpdate, destination: Path) -> None:
+        super().__init__()
+        self._client = client
+        self._update = update
+        self._destination = destination
+
+    def run(self) -> None:
+        try:
+            self.downloaded.emit(self._client.download(self._update, self._destination))
+        except UpdateError as error:
+            self.failed.emit(str(error))
 
 
 class SettingsPage(QWidget):
@@ -77,6 +111,7 @@ class SettingsPage(QWidget):
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
         google_oauth: GoogleOAuthStore | None = None,
+        releases: ReleaseClient | None = None,
     ) -> None:
         super().__init__()
         self._service = service
@@ -91,6 +126,9 @@ class SettingsPage(QWidget):
         self._dsb_sheet_factory = dsb_sheet_factory
         self._google_sync = google_sync
         self._google_oauth = google_oauth
+        self._releases = releases
+        self._update_worker: QThread | None = None
+        self._pending_update: AvailableUpdate | None = None
 
         title = QLabel("Settings")
         font = title.font()
@@ -153,6 +191,13 @@ class SettingsPage(QWidget):
         app_form.addRow("Sleep prompt after", self._sleep_minutes)
         app_form.addRow("Theme", self._theme)
         app_form.addRow(self._startup_enabled)
+        if releases is not None:
+            self._check_updates = QPushButton("Check for updates")
+            self._check_updates.clicked.connect(self._check_for_updates)
+            self._update_status = QLabel("Updates are checked only when you ask.")
+            self._update_status.setWordWrap(True)
+            app_form.addRow(self._check_updates)
+            app_form.addRow("Updates", self._update_status)
         app_form.addRow(save_preferences)
         application_group = QGroupBox("Application")
         application_group.setLayout(app_form)
@@ -522,6 +567,96 @@ class SettingsPage(QWidget):
 
     def _open_log_folder(self) -> None:
         QProcess.startDetached("explorer", [str(self._paths.log_dir)])
+
+    def _check_for_updates(self) -> None:
+        if self._releases is None:
+            return
+        self._check_updates.setEnabled(False)
+        self._update_status.setText("Checking the QI Flow release service…")
+        worker = UpdateCheckWorker(self._releases)
+        worker.checked.connect(self._update_check_finished)
+        worker.failed.connect(self._update_failed)
+        worker.finished.connect(lambda: self._check_updates.setEnabled(True))
+        self._update_worker = worker
+        worker.start()
+
+    def _update_check_finished(self, update: object) -> None:
+        if update is None:
+            self._update_status.setText("QI Flow is up to date.")
+            return
+        releases = self._releases
+        if not isinstance(update, AvailableUpdate) or releases is None:
+            self._update_failed("The release service returned invalid update information.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "QI Flow update available",
+            f"Version {update.version} is available. Download and install it now?\n\n"
+            "QI Flow will close briefly. Your local data and settings will be kept.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            self._update_status.setText(f"Version {update.version} is available.")
+            return
+        self._check_updates.setEnabled(False)
+        self._update_status.setText(f"Downloading version {update.version}…")
+        self._pending_update = update
+        destination = self._paths.data_dir / "updates" / f"QI-Flow-{update.version}.zip"
+        worker = UpdateDownloadWorker(releases, update, destination)
+        worker.downloaded.connect(self._update_downloaded)
+        worker.failed.connect(self._update_failed)
+        worker.finished.connect(lambda: self._check_updates.setEnabled(True))
+        self._update_worker = worker
+        worker.start()
+
+    def _update_downloaded(self, archive: object) -> None:
+        if not isinstance(archive, Path):
+            self._update_failed("The downloaded update could not be staged.")
+            return
+        if self._pending_update is None:
+            self._update_failed("No verified release information is available for this package.")
+            return
+        app_executable = Path(sys.executable).resolve()
+        install_dir = app_executable.parent
+        bundled_helper = install_dir / "QI Flow Updater.exe"
+        if not bundled_helper.is_file() or install_dir.name.casefold() != "qi flow":
+            self._update_failed(
+                "In-app updates are available from an installed Windows build only."
+            )
+            return
+        updates_dir = self._paths.data_dir / "updates"
+        helper = updates_dir / "QI Flow Updater.exe"
+        try:
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled_helper, helper)
+        except OSError:
+            self._update_failed("The update helper could not be staged in your user data folder.")
+            return
+        success, _ = QProcess.startDetached(
+            str(helper),
+            [
+                "--pid",
+                str(QCoreApplication.applicationPid()),
+                "--archive",
+                str(archive),
+                "--install-dir",
+                str(install_dir),
+                "--sha256",
+                self._pending_update.sha256,
+            ],
+            str(updates_dir),
+        )
+        if not success:
+            self._update_failed("The update helper could not be started. QI Flow is unchanged.")
+            return
+        self._update_status.setText("Installing the verified update and restarting QI Flow…")
+        QCoreApplication.quit()
+
+    def _update_failed(self, message: str) -> None:
+        self._check_updates.setEnabled(True)
+        self._update_status.setText(message)
+        QMessageBox.warning(self, "QI Flow update", message)
 
     def _restore_selected(self) -> None:
         backup = self._backup_list.currentData()

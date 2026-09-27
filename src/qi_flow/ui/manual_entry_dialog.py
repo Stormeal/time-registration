@@ -6,6 +6,7 @@ from datetime import date, datetime, time
 from typing import cast
 
 from PySide6.QtCore import QDate, QTime
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -76,6 +77,7 @@ class ManualEntryDialog(QDialog):
                 self._parent.setCurrentIndex(index)
             self._parent.setEnabled(False)
         self._update_parent_visibility()
+        self._initial_values = self._form_values()
 
     def _load_sessions(self) -> None:
         for session in self._service.completed_sessions():
@@ -113,6 +115,32 @@ class ManualEntryDialog(QDialog):
             QMessageBox.warning(self, "QI Flow", str(error))
             return
         self.accept()
+
+    def reject(self) -> None:
+        if self._form_values() != self._initial_values:
+            answer = QMessageBox.question(
+                self,
+                "Discard unsaved entry?",
+                "Your time entry has unsaved changes. Discard them?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Discard:
+                return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        event.ignore()
+        self.reject()
+
+    def _form_values(self) -> tuple[object, ...]:
+        return (
+            self._kind.currentData(),
+            self._date.date(),
+            self._parent.currentData(),
+            self._start.time(),
+            self._end.time(),
+        )
 
     @staticmethod
     def _as_copenhagen(work_date: QDate, work_time: QTime) -> datetime:

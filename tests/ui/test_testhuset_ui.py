@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
 from PySide6.QtCore import QDate, Qt, QTime
+from PySide6.QtWidgets import QMessageBox
 
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
@@ -15,6 +16,7 @@ from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.system import UuidIdentifierGenerator
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
+from qi_flow.ui.history_dialog import HistoryDialog
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 from qi_flow.ui.session_editor_dialog import SessionEditorDialog
 from qi_flow.ui.testhuset_dialog import TesthusetDialog
@@ -170,12 +172,106 @@ def test_session_editor_can_save_office_status_for_its_day(qtbot, tmp_path) -> N
     qtbot.addWidget(dialog)
 
     dialog._office.setChecked(True)
+    dialog._note.setPlainText("DSB office day\nKøbenhavn")
     qtbot.mouseClick(dialog._save_office, Qt.MouseButton.LeftButton)
 
     details = tracking.day_details(date(2026, 9, 14))
     assert details is not None
     assert details.location is WorkLocation.OFFICE
-    assert details.note == "DSB office day"
+    assert details.note == "DSB office day\nKøbenhavn"
+
+
+def test_manual_entry_cancel_confirms_before_discarding_changes(
+    qtbot, tmp_path, monkeypatch
+) -> None:
+    _, tracking, _, _ = build(tmp_path)
+    dialog = ManualEntryDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog._start.setTime(QTime(8, 30))
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Cancel),
+    )
+    dialog.close()
+    assert dialog.isVisible()
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Discard),
+    )
+    dialog.close()
+    assert not dialog.isVisible()
+
+
+def test_deleted_entry_is_recoverable_from_history_dialog(qtbot, tmp_path, monkeypatch) -> None:
+    _, tracking, session, _ = build(tmp_path)
+    tracking.delete_work_session(session.id)
+    dialog = HistoryDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+    assert dialog._tree.topLevelItemCount() == 1
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(0))
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Yes),
+    )
+
+    dialog._restore_selected()
+
+    assert tracking.completed_sessions_for_day(date(2026, 9, 14))[0].id == session.id
+
+
+def test_delete_requires_confirmation(qtbot, tmp_path, monkeypatch) -> None:
+    _, tracking, _session, _ = build(tmp_path)
+    dialog = SessionEditorDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(0))
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Cancel),
+    )
+    dialog._delete_selected()
+    assert len(tracking.completed_sessions_for_day(date(2026, 9, 14))) == 1
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Yes),
+    )
+    dialog._delete_selected()
+    assert tracking.completed_sessions_for_day(date(2026, 9, 14)) == []
+    assert tracking.entry_history_for_day(date(2026, 9, 14))
+
+
+def test_correction_close_confirms_unsaved_interval(qtbot, tmp_path, monkeypatch) -> None:
+    _, tracking, _, _ = build(tmp_path)
+    dialog = SessionEditorDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(0))
+    dialog._start.setTime(QTime(8, 0))
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Cancel),
+    )
+    dialog.close()
+    assert dialog.isVisible()
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args: QMessageBox.StandardButton.Discard),
+    )
+    dialog.close()
+    assert not dialog.isVisible()
 
 
 def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qi_flow import __version__
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
@@ -24,6 +25,7 @@ from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
 from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
+from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.settings_page import SettingsPage
 from qi_flow.ui.testhuset_dialog import SheetFactory
 from qi_flow.ui.timesheet_page import TimesheetPage
@@ -47,6 +49,7 @@ class MainWindow(QMainWindow):
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
         google_oauth: GoogleOAuthStore | None = None,
+        releases: ReleaseClient | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
                 dsb_sheet_factory,
                 google_sync,
                 google_oauth,
+                releases,
             )
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)
@@ -123,10 +127,20 @@ class MainWindow(QMainWindow):
         self._navigation.currentRowChanged.connect(self._pages.setCurrentIndex)
         self._navigation.setCurrentRow(0)
 
+        navigation_panel = QWidget()
+        navigation_layout = QVBoxLayout(navigation_panel)
+        navigation_layout.setContentsMargins(0, 0, 0, 12)
+        navigation_layout.setSpacing(0)
+        navigation_layout.addWidget(self._navigation)
+        self._version_label = QLabel(f"Version {__version__}")
+        self._version_label.setObjectName("applicationVersion")
+        self._version_label.setContentsMargins(18, 0, 0, 0)
+        navigation_layout.addWidget(self._version_label)
+
         content = QWidget()
         layout = QHBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._navigation)
+        layout.addWidget(navigation_panel)
         layout.addWidget(self._pages, 1)
         self.setCentralWidget(content)
 

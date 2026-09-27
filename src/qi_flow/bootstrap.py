@@ -34,6 +34,7 @@ from qi_flow.infrastructure.system import SystemClock, UuidIdentifierGenerator
 from qi_flow.infrastructure.testhuset_browser import temporary_sheet
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
+from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.exit_dialog import ExitCoordinator
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.tray import TrayController
@@ -158,6 +159,7 @@ def run(argv: list[str] | None = None) -> int:
         temporary_dsb_sheet,
         GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock()),
         GoogleOAuthStore(),
+        ReleaseClient(),
     )
     preferences = service.app_preferences()
     if preferences.theme == "dark":

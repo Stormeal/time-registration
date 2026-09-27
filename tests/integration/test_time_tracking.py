@@ -17,10 +17,12 @@ from qi_flow.application.dto import (
     StartWorkCommand,
     UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
+    UpdateWorkSessionCommand,
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import (
     InvalidIntervalError,
+    InvalidStateTransitionError,
     OverlappingIntervalError,
     RecoveryRequiredError,
 )
@@ -41,6 +43,7 @@ class FixedIds:
     def __init__(self) -> None:
         self.session_count = 0
         self.deduction_count = 0
+        self.audit_count = 0
 
     def session_id(self) -> SessionId:
         self.session_count += 1
@@ -51,7 +54,8 @@ class FixedIds:
         return DeductionId(f"deduction-{self.deduction_count}")
 
     def audit_id(self) -> str:
-        return f"audit-{self.session_count}-{self.deduction_count}"
+        self.audit_count += 1
+        return f"audit-{self.audit_count}"
 
 
 def build_service(
@@ -194,6 +198,165 @@ def test_start_and_finish_timer_actions_can_be_undone_for_30_seconds(tmp_path: P
     assert recovered.session_id == SessionId("session-2")
 
 
+def test_lunch_timer_actions_can_be_undone_for_30_seconds(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    assert service.undo_last_timer_action().active_deduction_kind is None
+
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=30)
+    service.finish_deduction(FinishDeductionCommand())
+    assert service.undo_last_timer_action().active_deduction_kind is DeductionKind.LUNCH
+    with SQLiteUnitOfWork(database) as uow:
+        active = uow.deductions.get_active(SessionId("session-1"))
+    assert active is not None
+    assert active.actual_ended_at is None
+
+
+def test_timer_undo_expires_after_30_seconds(tmp_path: Path) -> None:
+    service, clock, _ = build_service(tmp_path, datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(seconds=31)
+
+    assert not service.can_undo_timer_action()
+    with pytest.raises(InvalidStateTransitionError):
+        service.undo_last_timer_action()
+
+
+def test_history_restores_the_exact_selected_edited_version(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 15, 0, tzinfo=UTC),
+        )
+    )
+    service.update_work_session(
+        UpdateWorkSessionCommand(
+            session.id,
+            datetime(2026, 9, 15, 8, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 16, 0, tzinfo=UTC),
+        )
+    )
+
+    history = service.entry_history_for_day(date(2026, 9, 15))
+    assert len(history) == 1
+    restored = service.restore_history_entry(history[0].audit_id)
+
+    assert restored.actual_started_at == datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    assert restored.actual_ended_at == datetime(2026, 9, 15, 15, 0, tzinfo=UTC)
+    assert len(service.entry_history_for_day(date(2026, 9, 15))) == 2
+
+
+def test_restored_history_revalidates_overlap_before_applying(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    first = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 11, 0, tzinfo=UTC),
+        )
+    )
+    service.update_work_session(
+        UpdateWorkSessionCommand(
+            first.id,
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 9, 0, tzinfo=UTC),
+        )
+    )
+    second = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 10, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+        )
+    )
+    history = service.entry_history_for_day(date(2026, 9, 15))
+    first_version = next(entry for entry in history if entry.entity_id == str(first.id))
+
+    with pytest.raises(OverlappingIntervalError):
+        service.restore_history_entry(first_version.audit_id)
+    current = service.completed_sessions_for_day(date(2026, 9, 15))
+    assert next(item for item in current if item.id == first.id).actual_ended_at == datetime(
+        2026, 9, 15, 9, 0, tzinfo=UTC
+    )
+    assert any(item.id == second.id for item in current)
+
+
+def test_history_restores_deleted_session_and_child_deduction_separately(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, _, _ = build_service(tmp_path, now)
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 15, 0, tzinfo=UTC),
+        )
+    )
+    deduction = service.add_manual_deduction(
+        ManualDeductionCommand(
+            session.id,
+            DeductionKind.LUNCH,
+            datetime(2026, 9, 15, 11, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 11, 30, tzinfo=UTC),
+        )
+    )
+    service.delete_work_session(session.id)
+    history = service.entry_history_for_day(date(2026, 9, 15))
+    session_version = next(entry for entry in history if entry.entity_type == "work_session")
+    deduction_version = next(entry for entry in history if entry.entity_type == "deduction")
+
+    service.restore_history_entry(session_version.audit_id)
+    service.restore_history_entry(deduction_version.audit_id)
+
+    assert len(service.completed_sessions_for_day(date(2026, 9, 15))) == 1
+    assert [item.id for item in service.completed_deductions(session.id)] == [deduction.id]
+
+
+def test_sleep_detection_clamps_to_session_and_avoids_double_deduction(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    clock.value = start + timedelta(minutes=30)
+    assert (
+        service.detect_sleep_gap(start - timedelta(minutes=20), start + timedelta(minutes=30))
+        is None
+    )
+    clock.value = start + timedelta(minutes=31)
+    gap = service.detect_sleep_gap(start - timedelta(minutes=20), clock.value)
+    assert gap is not None
+    assert gap.started_at == start
+    service.resolve_sleep_gap("include")
+
+    lunch_start = start + timedelta(hours=2)
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH, lunch_start))
+    service.finish_deduction(FinishDeductionCommand(lunch_start + timedelta(minutes=30)))
+    clock.value = lunch_start + timedelta(hours=1, minutes=15)
+    gap = service.detect_sleep_gap(lunch_start + timedelta(minutes=15), clock.value)
+    assert gap is not None
+    service.resolve_sleep_gap("exclude")
+
+    with SQLiteUnitOfWork(database) as uow:
+        deductions = uow.deductions.list_for_session(SessionId("session-1"))
+    assert len(deductions) == 2
+    lunch = next(item for item in deductions if item.kind is DeductionKind.LUNCH)
+    sleep_break = next(item for item in deductions if item.kind is DeductionKind.SLEEP_BREAK)
+    assert lunch.actual_ended_at == sleep_break.actual_started_at
+    assert sleep_break.actual_ended_at == clock.value
+
+
+def test_sleep_detection_can_be_disabled(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.set_sleep_detection(False, 30)
+    clock.value += timedelta(hours=1)
+
+    assert service.detect_sleep_gap(start, clock.value) is None
+    assert service.pending_sleep_gap() is None
+
+
 def test_manual_entries_are_exact_and_reject_overlap_or_orphan_lunch(tmp_path: Path) -> None:
     now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
     service, _, _ = build_service(tmp_path, now)
@@ -243,6 +406,25 @@ def test_day_context_persists_multiline_unicode(tmp_path: Path) -> None:
     assert details.note == "DSB\nKøbenhavn"
 
 
+def test_cross_midnight_session_copies_office_status_and_next_day_is_editable(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 9, 14, 20, 30, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.update_day_details(UpdateDayDetailsCommand(date(2026, 9, 14), WorkLocation.OFFICE, ""))
+    service.start_work(StartWorkCommand())
+    clock.value = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
+    service.finish_work(FinishWorkCommand())
+
+    summaries = {item.work_date: item for item in service.month(2026, 9)}
+    assert summaries[date(2026, 9, 15)].location is WorkLocation.OFFICE
+    service.update_day_details(
+        UpdateDayDetailsCommand(date(2026, 9, 15), WorkLocation.REMOTE, "Working remotely")
+    )
+    summaries = {item.work_date: item for item in service.month(2026, 9)}
+    assert summaries[date(2026, 9, 15)].location is WorkLocation.REMOTE
+
+
 def test_deleted_manual_session_can_be_restored_from_30_day_audit(tmp_path: Path) -> None:
     now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
     service, _, _ = build_service(tmp_path, now)
@@ -257,10 +439,29 @@ def test_deleted_manual_session_can_be_restored_from_30_day_audit(tmp_path: Path
     assert restored.actual_ended_at == datetime(2026, 9, 15, 15, 0, tzinfo=UTC)
 
 
+def test_history_entry_expires_after_30_days(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, now)
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 7, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 15, 0, tzinfo=UTC),
+        )
+    )
+    service.delete_work_session(session.id)
+    version = service.entry_history_for_day(date(2026, 9, 15))[0]
+    clock.value += timedelta(days=30, seconds=1)
+
+    assert service.entry_history_for_day(date(2026, 9, 15)) == []
+    with pytest.raises(InvalidStateTransitionError):
+        service.restore_history_entry(version.audit_id)
+
+
 def test_long_sleep_requires_resolution_and_can_be_excluded_as_break(tmp_path: Path) -> None:
     start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
     service, clock, database = build_service(tmp_path, start)
     service.start_work(StartWorkCommand())
+    clock.value = start + timedelta(hours=2, minutes=31)
     gap = service.detect_sleep_gap(
         start + timedelta(hours=2), start + timedelta(hours=2, minutes=31)
     )

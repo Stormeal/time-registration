@@ -50,6 +50,7 @@ src/qi_flow/
     logging.py                privacy-safe rotating diagnostics
     system.py                 system clock and UUID identifier generators
     startup.py                optional "Start with Windows" registry adapter
+    updates.py                HTTPS release checks and SHA-256-verified package staging
     single_instance.py        QLocalServer/QLocalSocket single-instance guard
     sqlite/
       database.py             connections, transactions, migration runner
@@ -159,6 +160,21 @@ credentials, cookies, page snapshots and request contents are never logged or pe
 The adapter reloads the server sheet before confirmation reconciliation. Because the destination
 does not offer UI-level atomic compare-and-set, simultaneous external edits remain a limitation.
 Browser integration tests intercept all page requests and exercise the DOM/save contract in Edge.
+
+### Epic G updater (2026-09-27)
+
+The infrastructure release client reads only the public GitHub latest-release endpoint and
+downloads a fixed-name update ZIP after explicit user confirmation. It validates the version,
+asset URL, size, and release asset SHA-256 digest before staging under the existing per-user
+application-data directory. It sends no local identity or time-tracking data.
+
+The standard-library updater helper is copied out of the install folder before launch so Windows
+does not lock the helper while replacing the application directory. It waits for QI Flow to exit,
+re-verifies the staged package, rejects unsafe archive paths, stages on the install volume, and
+renames the old app folder aside before moving the new folder into place. Failed replacement
+restores the previous folder; user data remains outside the install directory. Release assets must
+use the expected filename and expose a SHA-256 digest. The installer remains available for first
+installs and recovery.
 
 ### Before implementation
 

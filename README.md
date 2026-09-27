@@ -88,6 +88,9 @@ private Windows application-data folder.
 - Functional user stories: US01–US04 and US09–US20 implemented and verified.
 - Packaging: `scripts/build-installer.ps1` produces a per-user Windows installer. A clean-account
   installation verification remains before release.
+- The same build creates `dist/QI-Flow-Update.zip`; attach it to a published GitHub release using
+  that exact asset name. QI Flow checks the latest stable release on user request and applies an
+  update only after confirmation and SHA-256 verification. No user data or credentials are uploaded.
 - Corrections and polish: Timesheet offers a completed-entry editor, Today explains configurable
   options with tooltips, and QI Flow uses a dedicated teal Windows icon.
 

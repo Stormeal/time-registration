@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pytestqt.qtbot import QtBot
 
+from qi_flow import __version__
 from qi_flow.ui.main_window import MainWindow
 
 
@@ -37,3 +38,11 @@ def test_show_settings_reveals_the_window_on_the_settings_page(qtbot: QtBot) -> 
 
     assert window.isVisible()
     assert window._navigation.currentRow() == window._page_index["Settings"]
+
+
+def test_navigation_shows_the_application_version_at_its_bottom(qtbot: QtBot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window._version_label.text() == f"Version {__version__}"
+    assert window._version_label.objectName() == "applicationVersion"

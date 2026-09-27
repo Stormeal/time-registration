@@ -1,6 +1,7 @@
 param(
     [switch]$InstallDependencies,
-    [string]$Version = ""
+    [string]$Version = "",
+    [string]$OutputRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,22 +19,27 @@ if ($InstallDependencies) {
     }
 }
 
-$projectVersion = if ($Version) {
-    $Version
-} else {
-    & $python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
-}
+$projectVersion = & $python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
 $projectVersion = $projectVersion.Trim()
-$env:QI_FLOW_VERSION = $projectVersion
+$runtimeVersion = & $python -c "import qi_flow; print(qi_flow.__version__)"
+if ($LASTEXITCODE -ne 0 -or $runtimeVersion.Trim() -ne $projectVersion) {
+    throw "The installed QI Flow package version does not match pyproject.toml. Reinstall the project before packaging."
+}
+if ($Version -and $Version -ne $projectVersion) {
+    throw "The requested installer version must match the QI Flow package version ($projectVersion)."
+}
 
 # Build with Windows' persistent PATH entries instead of inheriting paths injected
 # by the invoking tool.  PyInstaller scans PATH for DLL dependencies; a host tool's
 # ICU libraries can otherwise be copied into the app and prevent Qt from loading.
-$buildPathEntries = @(
-    "$projectRoot\.venv\Scripts",
-    [Environment]::GetEnvironmentVariable("Path", "Machine"),
-    [Environment]::GetEnvironmentVariable("Path", "User")
-) | Where-Object { $_ }
+$machinePathEntries = [Environment]::GetEnvironmentVariable("Path", "Machine") -split ";"
+$userPathEntries = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
+$buildPathEntries = @("$projectRoot\.venv\Scripts") + $machinePathEntries + $userPathEntries
+$buildPathEntries = $buildPathEntries | Where-Object {
+    $_ -and
+    -not $_.ToLowerInvariant().Contains("\.cache\codex-runtimes\") -and
+    -not $_.ToLowerInvariant().Contains("\.codex\")
+}
 $env:PATH = $buildPathEntries -join ";"
 
 # Fail before packaging if the virtual environment cannot load Qt with the same
@@ -44,14 +50,30 @@ if ($LASTEXITCODE -ne 0) {
     throw "Qt could not be imported from the build environment. The installer was not created."
 }
 
-# PyInstaller leaves stale files in an existing one-folder distribution. A partial build could
+# A caller-supplied output root allows isolated packaging checks without touching the normal
+# dist/build output. PyInstaller leaves stale files in an existing one-folder distribution. A partial build could
 # otherwise be packaged with incompatible Qt/Python files from an earlier build.
-$bundle = Join-Path $projectRoot "dist\QI Flow"
-$buildOutput = Join-Path $projectRoot "build\QI Flow"
-foreach ($output in @($bundle, $buildOutput)) {
-    if (Test-Path $output) {
-        $resolved = (Resolve-Path $output).Path
-        if (-not $resolved.StartsWith($projectRoot, [StringComparison]::OrdinalIgnoreCase)) {
+$artifactRoot = if ($OutputRoot) {
+    [System.IO.Path]::GetFullPath($OutputRoot)
+} else {
+    Join-Path $projectRoot "dist"
+}
+$workRoot = if ($OutputRoot) {
+    Join-Path $artifactRoot "build"
+} else {
+    Join-Path $projectRoot "build"
+}
+$bundle = Join-Path $artifactRoot "QI Flow"
+$buildOutput = Join-Path $workRoot "QI Flow"
+foreach ($output in @(
+    @{ Path = $bundle; Root = $artifactRoot },
+    @{ Path = $buildOutput; Root = $workRoot }
+)) {
+    $outputPath = $output.Path
+    $outputRootPath = [System.IO.Path]::GetFullPath($output.Root).TrimEnd('\') + '\'
+    if (Test-Path $outputPath) {
+        $resolved = (Resolve-Path $outputPath).Path
+        if (-not $resolved.StartsWith($outputRootPath, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing to remove build output outside the project: $resolved"
         }
         Remove-Item -LiteralPath $resolved -Recurse -Force
@@ -65,7 +87,8 @@ try {
         throw "Icon generation failed with exit code $LASTEXITCODE."
     }
     & $python -m PyInstaller --noconfirm --clean --windowed --name "QI Flow" `
-        --icon "src\qi_flow\assets\qiflow-icon.ico" `
+        --distpath $artifactRoot --workpath $buildOutput --specpath $workRoot `
+        --icon (Join-Path $projectRoot "src\qi_flow\assets\qiflow-icon.ico") `
         --collect-all playwright `
         --collect-all keyring `
         --collect-all win32ctypes `
@@ -75,13 +98,26 @@ try {
         --collect-all google.oauth2 `
         --hidden-import google_auth_httplib2 `
         --hidden-import tzdata `
-        --add-data "src\qi_flow\infrastructure\sqlite\migrations;qi_flow\infrastructure\sqlite\migrations" `
-        --add-data "src\qi_flow\assets;qi_flow\assets" `
-        --paths src `
+        --add-data "$(Join-Path $projectRoot 'src\qi_flow\infrastructure\sqlite\migrations');qi_flow\infrastructure\sqlite\migrations" `
+        --add-data "$(Join-Path $projectRoot 'src\qi_flow\assets');qi_flow\assets" `
+        --paths (Join-Path $projectRoot "src") `
         src/qi_flow/__main__.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE."
     }
+    & $python scripts/filter_host_runtime_dlls.py `
+        --analysis (Join-Path $buildOutput "QI Flow\COLLECT-00.toc") --bundle $bundle
+    if ($LASTEXITCODE -ne 0) {
+        throw "Host-injected runtime DLLs could not be filtered from the application bundle."
+    }
+    & $python -m PyInstaller --noconfirm --clean --onefile --windowed `
+        --distpath $artifactRoot --workpath (Join-Path $workRoot "updater") --specpath $workRoot `
+        --name "QI Flow Updater" scripts/update_helper.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "The QI Flow updater helper build failed with exit code $LASTEXITCODE."
+    }
+    Copy-Item -LiteralPath (Join-Path $artifactRoot "QI Flow Updater.exe") `
+        -Destination (Join-Path $bundle "QI Flow Updater.exe")
     $requiredBundleFiles = @(
         (Join-Path $bundle "QI Flow.exe"),
         (Join-Path $bundle "_internal\base_library.zip")
@@ -100,6 +136,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "The packaged QI Flow smoke check failed; the installer was not created."
     }
+    & $python scripts/build-update-package.py --bundle-dir $bundle --output-dir $artifactRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "The in-app update package could not be assembled."
+    }
 } finally {
     Pop-Location
 }
@@ -114,9 +154,11 @@ if (-not $iscc) {
     throw "Inno Setup 6 is required to create the installer. Install it, then rerun this script."
 }
 
-& $iscc "/DMyAppVersion=$projectVersion" "installer\QIFlow.iss"
+$installerOutput = Join-Path $artifactRoot "installer"
+& $iscc "/DMyAppVersion=$projectVersion" "/DMyAppBundleDir=$bundle" `
+    "/DMyAppOutputDir=$installerOutput" "installer\QIFlow.iss"
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE."
 }
 
-Write-Host "Installer created in dist/installer. It installs per user and preserves local data on uninstall."
+Write-Host "Installer created in $installerOutput. It installs per user and preserves local data on uninstall."

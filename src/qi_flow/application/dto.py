@@ -96,6 +96,16 @@ class SleepGapView:
 
 
 @dataclass(frozen=True, slots=True)
+class EntryHistoryView:
+    audit_id: str
+    entity_type: str
+    entity_id: str
+    action: str
+    changed_at: datetime
+    before_state: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class DaySummaryView:
     work_date: date
     first_start: datetime | None

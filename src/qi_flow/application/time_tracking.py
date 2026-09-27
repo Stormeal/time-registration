@@ -11,6 +11,7 @@ from qi_flow.application.dto import (
     ActiveStateView,
     AppPreferencesView,
     DaySummaryView,
+    EntryHistoryView,
     FinishDeductionCommand,
     FinishWorkCommand,
     ManualDeductionCommand,
@@ -122,6 +123,7 @@ class TimeTrackingApplicationService:
                 rounding_minutes=1,
             )
             uow.sessions.add(session)
+            self._copy_office_context(uow, start, end)
         return session
 
     def update_work_session(self, command: UpdateWorkSessionCommand) -> WorkSession:
@@ -154,6 +156,7 @@ class TimeTrackingApplicationService:
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            self._copy_office_context(uow, start, end)
         return session
 
     def update_active_work_start(self, command: UpdateActiveWorkStartCommand) -> WorkSession:
@@ -274,9 +277,14 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError(
                     "No recoverable work-session version is available."
                 )
+            self._record_session_audit(uow, session, "update", now)
             self._restore_session_snapshot(session, snapshot, now)
             if session.is_active and uow.sessions.get_active() not in (None, session):
                 raise InvalidStateTransitionError("Cannot restore a second active work session.")
+            if session.actual_ended_at is not None:
+                self._ensure_session_has_no_overlap(
+                    uow, session.actual_started_at, session.actual_ended_at, session.id
+                )
             uow.sessions.save(session)
         return session
 
@@ -289,9 +297,131 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError(
                     "No recoverable lunch or break version is available."
                 )
+            self._record_deduction_audit(uow, deduction, "update", now)
             self._restore_deduction_snapshot(deduction, snapshot, now)
+            session = uow.sessions.get(deduction.session_id)
+            if session is None or session.deleted_at is not None:
+                raise InvalidStateTransitionError("Restore the parent work session first.")
+            if deduction.actual_ended_at is not None:
+                self._ensure_deduction_fits(
+                    uow,
+                    session,
+                    deduction.actual_started_at,
+                    deduction.actual_ended_at,
+                    deduction.id,
+                )
             uow.deductions.save(deduction)
         return deduction
+
+    def entry_history_for_day(self, work_date: date) -> list[EntryHistoryView]:
+        """List unexpired work and deduction before-images intersecting a local date."""
+        start = datetime.combine(work_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), COPENHAGEN)
+        end = end.astimezone(UTC)
+        now = self._when(None)
+        result: list[EntryHistoryView] = []
+        with self._uow_factory() as uow:
+            for row in uow.audit.list_active(now):
+                if row["entity_type"] not in {"work_session", "deduction"}:
+                    continue
+                snapshot = cast(dict[str, object], row["before_state"])
+                start_value = snapshot.get("actual_started_at")
+                if not isinstance(start_value, str):
+                    continue
+                interval_start = datetime.fromisoformat(start_value).astimezone(UTC)
+                end_value = snapshot.get("actual_ended_at")
+                interval_end = (
+                    datetime.fromisoformat(end_value).astimezone(UTC)
+                    if isinstance(end_value, str)
+                    else now
+                )
+                if interval_start >= end or interval_end <= start:
+                    continue
+                result.append(
+                    EntryHistoryView(
+                        str(row["audit_id"]),
+                        str(row["entity_type"]),
+                        str(row["entity_id"]),
+                        str(row["action"]),
+                        cast(datetime, row["changed_at"]),
+                        snapshot,
+                    )
+                )
+        return result
+
+    def restore_history_entry(self, audit_id: str) -> WorkSession | Deduction:
+        """Restore the exact before-image selected from an entry's recoverable history."""
+        now = self._when(None)
+        with self._uow_factory() as uow:
+            row = uow.audit.get_active(audit_id, now)
+            if row is None:
+                raise InvalidStateTransitionError(
+                    "That history version has expired or is no longer available."
+                )
+            entity_type = str(row["entity_type"])
+            entity_id = str(row["entity_id"])
+            snapshot = cast(dict[str, object], row["before_state"])
+            if entity_type == "work_session":
+                session_id = SessionId(entity_id)
+                session = uow.sessions.get(session_id)
+                if session is None:
+                    raise InvalidStateTransitionError("The work session is unavailable.")
+                self._record_session_audit(uow, session, "update", now)
+                self._restore_session_snapshot(session, snapshot, now)
+                if session.is_active:
+                    active = uow.sessions.get_active()
+                    if active is not None and active.id != session.id:
+                        raise InvalidStateTransitionError("Cannot restore a second active session.")
+                else:
+                    assert session.actual_ended_at is not None
+                    self._ensure_session_has_no_overlap(
+                        uow, session.actual_started_at, session.actual_ended_at, session.id
+                    )
+                for child_deduction in uow.deductions.list_for_session(session.id):
+                    if child_deduction.deleted_at is None and (
+                        child_deduction.actual_started_at < session.actual_started_at
+                        or (
+                            session.actual_ended_at is not None
+                            and (
+                                child_deduction.actual_ended_at is None
+                                or child_deduction.actual_ended_at > session.actual_ended_at
+                            )
+                        )
+                    ):
+                        raise InvalidIntervalError(
+                            "The restored session would not contain its saved breaks."
+                        )
+                uow.sessions.save(session)
+                return session
+            if entity_type == "deduction":
+                deduction_id = DeductionId(entity_id)
+                deduction = uow.deductions.get(deduction_id)
+                parent_session = uow.sessions.get(deduction.session_id) if deduction else None
+                if (
+                    deduction is None
+                    or parent_session is None
+                    or parent_session.deleted_at is not None
+                ):
+                    raise InvalidStateTransitionError(
+                        "The parent work session is unavailable. Restore it first."
+                    )
+                self._record_deduction_audit(uow, deduction, "update", now)
+                self._restore_deduction_snapshot(deduction, snapshot, now)
+                if deduction.actual_ended_at is not None:
+                    self._ensure_deduction_fits(
+                        uow,
+                        parent_session,
+                        deduction.actual_started_at,
+                        deduction.actual_ended_at,
+                        deduction.id,
+                    )
+                elif uow.deductions.get_active(parent_session.id) not in (None, deduction):
+                    raise InvalidStateTransitionError(
+                        "Another lunch or break is already running in this session."
+                    )
+                uow.deductions.save(deduction)
+                return deduction
+            raise InvalidStateTransitionError("This history record cannot be restored here.")
 
     def update_day_details(self, command: UpdateDayDetailsCommand) -> DaySummaryView:
         with self._uow_factory() as uow:
@@ -641,7 +771,8 @@ class TimeTrackingApplicationService:
     def detect_sleep_gap(self, started_at: datetime, ended_at: datetime) -> SleepGapView | None:
         start, end = self._when(started_at), self._when(ended_at)
         threshold = self.sleep_threshold_seconds()
-        if threshold == 0 or end - start < timedelta(seconds=threshold):
+        now = self._when(None)
+        if threshold == 0 or end <= start or end > now:
             return None
         with self._uow_factory() as uow:
             session = uow.sessions.get_active()
@@ -649,7 +780,7 @@ class TimeTrackingApplicationService:
                 return None
             if start < session.actual_started_at:
                 start = session.actual_started_at
-            if end <= start:
+            if end - start <= timedelta(seconds=threshold):
                 return None
             uow.settings.save(
                 "pending_sleep_gap",
@@ -694,20 +825,44 @@ class TimeTrackingApplicationService:
                     )
                 start = datetime.fromisoformat(str(value["started_at"]))
                 end = datetime.fromisoformat(str(value["ended_at"]))
-                deduction = Deduction(
-                    id=self._identifiers.deduction_id(),
-                    session_id=session.id,
-                    kind=DeductionKind.SLEEP_BREAK,
-                    actual_started_at=start,
-                    actual_ended_at=end,
-                    effective_started_at=start,
-                    effective_ended_at=end,
-                    source=EntrySource.RECOVERY,
-                    created_at=now,
-                    updated_at=now,
-                    rounding_minutes=1,
+                covered = sorted(
+                    (
+                        deduction.actual_started_at,
+                        deduction.actual_ended_at or now,
+                    )
+                    for deduction in uow.deductions.list_for_session(session.id)
+                    if deduction.deleted_at is None
+                    and deduction.actual_started_at < end
+                    and (deduction.actual_ended_at or now) > start
                 )
-                uow.deductions.add(deduction)
+                uncovered: list[tuple[datetime, datetime]] = []
+                cursor = start
+                for covered_start, covered_end in covered:
+                    if covered_start > cursor:
+                        uncovered.append((cursor, min(covered_start, end)))
+                    cursor = max(cursor, covered_end)
+                    if cursor >= end:
+                        break
+                if cursor < end:
+                    uncovered.append((cursor, end))
+                for break_start, break_end in uncovered:
+                    if break_end <= break_start:
+                        continue
+                    uow.deductions.add(
+                        Deduction(
+                            id=self._identifiers.deduction_id(),
+                            session_id=session.id,
+                            kind=DeductionKind.SLEEP_BREAK,
+                            actual_started_at=break_start,
+                            actual_ended_at=break_end,
+                            effective_started_at=break_start,
+                            effective_ended_at=break_end,
+                            source=EntrySource.RECOVERY,
+                            created_at=now,
+                            updated_at=now,
+                            rounding_minutes=1,
+                        )
+                    )
             uow.settings.save("pending_sleep_gap", None, now)
         return self.active_state(now)
 
@@ -738,6 +893,7 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError("End lunch before finishing work.")
             self._complete_session(session, now)
             uow.sessions.save(session)
+            self._copy_office_context(uow, session.actual_started_at, now)
         self._undo_action = _UndoAction("finish", str(session.id), now)
         return ActiveStateView(None, None, None, None, 0)
 
@@ -761,6 +917,7 @@ class TimeTrackingApplicationService:
                 rounding_minutes=rounding_minutes,
             )
             uow.deductions.add(deduction)
+        self._undo_action = _UndoAction("start_deduction", str(deduction.id), now)
         return self.active_state(now)
 
     def finish_deduction(self, command: FinishDeductionCommand) -> ActiveStateView:
@@ -788,6 +945,7 @@ class TimeTrackingApplicationService:
             deduction.updated_at = now
             deduction.revision += 1
             uow.deductions.save(deduction)
+        self._undo_action = _UndoAction("finish_deduction", str(deduction.id), now)
         return self.active_state(now)
 
     def active_state(self, now: datetime | None = None) -> ActiveStateView:
@@ -830,22 +988,53 @@ class TimeTrackingApplicationService:
             self._undo_action = None
             raise InvalidStateTransitionError("The 30-second undo period has expired.")
         with self._uow_factory() as uow:
-            session = uow.sessions.get(SessionId(action.session_id))
-            if session is None:
-                raise InvalidStateTransitionError("The timer action can no longer be undone.")
-            if action.kind == "start":
-                if not session.is_active or uow.deductions.get_active(session.id) is not None:
+            if action.kind in {"start_deduction", "finish_deduction"}:
+                deduction = uow.deductions.get(DeductionId(action.session_id))
+                if deduction is None:
                     raise InvalidStateTransitionError("The timer action can no longer be undone.")
-                session.deleted_at = now
+                session = uow.sessions.get(deduction.session_id)
+                if session is None or not session.is_active:
+                    raise InvalidStateTransitionError("The timer action can no longer be undone.")
+                if action.kind == "start_deduction":
+                    if not deduction.is_active:
+                        raise InvalidStateTransitionError(
+                            "The timer action can no longer be undone."
+                        )
+                    deduction.deleted_at = now
+                else:
+                    if deduction.actual_ended_at is None or (
+                        uow.deductions.get_active(session.id) is not None
+                    ):
+                        raise InvalidStateTransitionError(
+                            "The timer action can no longer be undone."
+                        )
+                    deduction.actual_ended_at = None
+                    deduction.effective_started_at = None
+                    deduction.effective_ended_at = None
+                deduction.updated_at = now
+                deduction.revision += 1
+                uow.deductions.save(deduction)
             else:
-                if uow.sessions.get_active() is not None:
+                session = uow.sessions.get(SessionId(action.session_id))
+                if session is None:
                     raise InvalidStateTransitionError("The timer action can no longer be undone.")
-                session.actual_ended_at = None
-                session.effective_started_at = None
-                session.effective_ended_at = None
-            session.updated_at = now
-            session.revision += 1
-            uow.sessions.save(session)
+                if action.kind == "start":
+                    if not session.is_active or uow.deductions.get_active(session.id) is not None:
+                        raise InvalidStateTransitionError(
+                            "The timer action can no longer be undone."
+                        )
+                    session.deleted_at = now
+                else:
+                    if uow.sessions.get_active() is not None:
+                        raise InvalidStateTransitionError(
+                            "The timer action can no longer be undone."
+                        )
+                    session.actual_ended_at = None
+                    session.effective_started_at = None
+                    session.effective_ended_at = None
+                session.updated_at = now
+                session.revision += 1
+                uow.sessions.save(session)
         self._undo_action = None
         return self.active_state(now)
 
@@ -863,10 +1052,18 @@ class TimeTrackingApplicationService:
         now = self._when(None)
         with self._uow_factory() as uow:
             session = self._require_active(uow)
+            self._record_session_audit(uow, session, "delete", now)
             session.deleted_at = now
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            for deduction in uow.deductions.list_for_session(session.id):
+                if deduction.deleted_at is None:
+                    self._record_deduction_audit(uow, deduction, "delete", now)
+                    deduction.deleted_at = now
+                    deduction.updated_at = now
+                    deduction.revision += 1
+                    uow.deductions.save(deduction)
         return ActiveStateView(None, None, None, None, 0)
 
     def _complete_session(self, session: WorkSession, now: datetime) -> None:
@@ -878,6 +1075,22 @@ class TimeTrackingApplicationService:
         session.effective_ended_at = end
         session.updated_at = now
         session.revision += 1
+
+    @staticmethod
+    def _copy_office_context(uow: UnitOfWork, started_at: datetime, ended_at: datetime) -> None:
+        """Copy the starting day's office choice to later dates the interval touches."""
+        local_start = started_at.astimezone(COPENHAGEN).date()
+        local_end = ended_at.astimezone(COPENHAGEN).date()
+        if local_end <= local_start:
+            return
+        source = uow.days.get(local_start)
+        if source is None:
+            return
+        day = local_start + timedelta(days=1)
+        while day <= local_end:
+            if uow.days.get(day) is None:
+                uow.days.save(DayDetails(day, source.location, ""))
+            day += timedelta(days=1)
 
     def _completed_times(
         self, started_at: datetime, ended_at: datetime
@@ -961,9 +1174,14 @@ class TimeTrackingApplicationService:
         )
         session.source = EntrySource(str(snapshot["source"]))
         session.deleted_at = TimeTrackingApplicationService._optional_time(snapshot, "deleted_at")
+        session.recovery_acknowledged_at = TimeTrackingApplicationService._optional_time(
+            snapshot, "recovery_acknowledged_at"
+        )
         session.rounding_minutes = int(cast(int, snapshot["rounding_minutes"]))
         task_id = snapshot.get("testhuset_task_id")
         session.testhuset_task_id = str(task_id) if task_id is not None else None
+        allocation_id = snapshot.get("dsb_allocation_id")
+        session.dsb_allocation_id = str(allocation_id) if allocation_id is not None else None
         session.updated_at = now
         session.revision += 1
 
@@ -982,6 +1200,9 @@ class TimeTrackingApplicationService:
             snapshot, "effective_ended_at"
         )
         deduction.source = EntrySource(str(snapshot["source"]))
+        kind = snapshot.get("kind")
+        if kind is not None:
+            deduction.kind = DeductionKind(str(kind))
         deduction.deleted_at = TimeTrackingApplicationService._optional_time(snapshot, "deleted_at")
         deduction.rounding_minutes = int(cast(int, snapshot["rounding_minutes"]))
         deduction.updated_at = now
@@ -989,7 +1210,7 @@ class TimeTrackingApplicationService:
 
     @staticmethod
     def _optional_time(snapshot: dict[str, object], key: str) -> datetime | None:
-        value = snapshot[key]
+        value = snapshot.get(key)
         return datetime.fromisoformat(str(value)) if value is not None else None
 
     @staticmethod
@@ -1007,8 +1228,12 @@ class TimeTrackingApplicationService:
             else None,
             "source": session.source.value,
             "deleted_at": session.deleted_at.isoformat() if session.deleted_at else None,
+            "recovery_acknowledged_at": session.recovery_acknowledged_at.isoformat()
+            if session.recovery_acknowledged_at
+            else None,
             "rounding_minutes": session.rounding_minutes,
             "testhuset_task_id": session.testhuset_task_id,
+            "dsb_allocation_id": session.dsb_allocation_id,
         }
 
     @staticmethod
@@ -1025,6 +1250,7 @@ class TimeTrackingApplicationService:
             if deduction.effective_ended_at
             else None,
             "source": deduction.source.value,
+            "kind": deduction.kind.value,
             "deleted_at": deduction.deleted_at.isoformat() if deduction.deleted_at else None,
             "rounding_minutes": deduction.rounding_minutes,
         }

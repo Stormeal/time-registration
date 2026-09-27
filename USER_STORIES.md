@@ -1,6 +1,6 @@
 # QI Flow — active user stories
 
-Version: 1.0 · Updated: 2026-09-19 · Status: active backlog only
+Version: 1.2 · Updated: 2026-09-27 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
@@ -10,71 +10,12 @@ after its acceptance criteria pass and any required release smoke check is recor
 
 | Status | Stories | Remaining work |
 | --- | --- | --- |
-| In progress | US05–US08 | Correction/history interaction and recovery edge cases. |
 | In progress | US21 | Clean-account installer and upgrade verification; package Google sync dependencies. |
+| In progress | US32 | Updater and package staging are implemented; a published release asset and clean-install smoke test remain. |
 | In progress | US28 | Complete authorization and synchronization behavior. |
 | In progress | US29 | Completed sessions and deductions merge through the shared sheet; explicit conflict resolution and other record types remain. |
 | In progress | US30 | Live DSB smoke check and release verification. |
 | Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
-
-## Epic B — Corrections and daily records
-
-### US05 — Add and edit time manually · P0
-
-Implementation status: **In progress** · manual intervals and validation exist; entry-editing UI remains.
-
-As a consultant, I want to add or correct work and lunch intervals so that forgotten or inaccurate entries can be repaired.
-
-Acceptance criteria:
-
-- Completed work and lunch intervals can be added and edited to minute precision without automatic rounding.
-- Manual entries choose one work-session date and use time-only start and end controls.
-- Future dates, end-before-start, overlaps, orphan lunch/break intervals, and multiple active intervals are blocked with actionable messages.
-- The active session start may be corrected if it still contains all child intervals.
-- Only timer actions can create open-ended intervals.
-- Unsaved form changes require confirmation before discard.
-
-### US06 — Delete, undo, and recover changes · P1
-
-Implementation status: **In progress** · soft deletion and 30-day audit recovery exist; history UI remains.
-
-As a consultant, I want safe correction controls so that an accidental edit or deletion does not permanently destroy my record.
-
-Acceptance criteria:
-
-- Deleting an entry requires confirmation and immediately removes it from totals.
-- Deleted entries and previous edited values remain recoverable for 30 days.
-- Timer actions expose Undo for 30 seconds.
-- Recovery restores the former values and recalculates affected totals.
-- History is available from entry details without cluttering the ordinary list.
-
-### US07 — Record daily context · P1
-
-Implementation status: **In progress** · office and note fields exist; cross-midnight context handling remains.
-
-As a consultant, I want to mark office attendance and add a daily note so that the timesheet retains necessary context.
-
-Acceptance criteria:
-
-- Each date has one office/remote value and one multiline Unicode note.
-- New days default to remote/unchecked; days without work display no workplace label.
-- Context can be entered before work exists and remains attached to the date.
-- A cross-midnight session copies office status to the second date, which can then be edited independently.
-- Notes are not written to diagnostic logs.
-
-### US08 — Resolve Windows sleep · P1
-
-Implementation status: **In progress** · local sleep-gap resolution exists; remaining platform-hardening work remains.
-
-As a consultant, I want to classify long computer sleep so that unattended time is not silently included or removed.
-
-Acceptance criteria:
-
-- Sleep detection is configurable and defaults to 30 minutes.
-- On qualifying resume, QI Flow offers Include as work, Exclude as break, or Decide later.
-- Excluded time becomes a labelled deducted break inside the continuous session.
-- Decide later permits viewing but disables timer actions until resolved.
-- Sleep detection can be disabled.
 
 ## Epic G — Setup, settings, and distribution
 
@@ -90,6 +31,33 @@ Acceptance criteria:
 - Upgrade preserves the database, settings, backups, and active-state compatibility through explicit schema migrations.
 - Uninstall behavior clearly distinguishes application removal from user-data removal.
 - No global keyboard shortcuts are registered in iteration 1.
+
+### US32 — Update QI Flow in place · P2
+
+Implementation status: **In progress** · manual release checks, verified download, staging, and helper-based replacement are implemented; a published update asset and Windows release smoke test remain.
+
+As a QI Flow user, I want to receive and apply verified application updates from inside the app so
+that I do not have to find, download, and run a new installer for every release.
+
+Acceptance criteria:
+
+- QI Flow checks the fixed public GitHub release feed when the user requests a check and tells the
+  user when a newer compatible version is available; checks and failures disclose no usage, notes,
+  time-entry, or credential data.
+- The user explicitly confirms applying an update. QI Flow downloads the application package to a
+  staging location and verifies its authenticity and integrity before changing installed files.
+- A small updater applies the verified package after QI Flow closes, then relaunches the updated
+  application. It requires no administrator rights and leaves the installer available for first
+  installation and recovery.
+- The updater does not overwrite the database, settings, backups, or other user data. Existing
+  schema migrations remain responsible for compatible database changes.
+- If download, verification, or file replacement fails, the current installation remains usable or
+  is restored, and the user receives an actionable message; retry is safe and does not duplicate or
+  damage user data.
+- Update checks respect offline conditions and do not block launch or ordinary tracking.
+- Tests cover available/no-update responses, invalid or tampered packages, interrupted downloads,
+  successful in-place replacement, unsafe archive paths, failure recovery, and preservation of user
+  data. A Windows release smoke test verifies helper exit wait, replacement, restart, and rollback.
 
 ## Epic J — Google Sheets cross-machine synchronization
 
@@ -169,7 +137,7 @@ Acceptance criteria:
 
 ## Release acceptance still open
 
-- A clean Windows-account test passes installation and the Start → Lunch → End lunch → Finish → edit → restart → export flow.
+- A clean Windows-account test passes installation and the Start → Lunch → End lunch → Finish → edit → restart → export flow, plus in-place updater success and failure recovery.
 - Recovery tests cover crash, Windows shutdown, previous-day active state, sleep classification, corrupted database, and invalid rounded intervals.
 - Testhuset receives a first real-fill and packaged-installer smoke check without automating week closure.
 - DSB receives a live reviewed-fill smoke check without approving or locking the week.
@@ -178,4 +146,5 @@ Acceptance criteria:
 
 - Requirements and decision interview: approved.
 - Completed stories: archived in `USER_STORIES_ARCHIVE.md`.
-- New epics and stories: intentionally deferred until the current product-direction ideas are reviewed.
+- US05–US08 (Epic B), US01–US04, US09–US20, and US22–US27 are implemented and verified.
+- US21 and US28–US32 remain in progress or not started as shown above.

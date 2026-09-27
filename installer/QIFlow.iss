@@ -4,6 +4,12 @@
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.1"
 #endif
+#ifndef MyAppBundleDir
+  #define MyAppBundleDir "..\dist\QI Flow"
+#endif
+#ifndef MyAppOutputDir
+  #define MyAppOutputDir "..\dist\installer"
+#endif
 #define MyAppPublisher "QI Flow"
 #define MyAppExeName "QI Flow.exe"
 
@@ -16,10 +22,9 @@ DefaultDirName={localappdata}\Programs\QI Flow
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\dist\installer
+OutputDir={#MyAppOutputDir}
 OutputBaseFilename=QI-Flow-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
@@ -27,7 +32,7 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]
-Source: "..\dist\QI Flow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyAppBundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\QI Flow"; Filename: "{app}\{#MyAppExeName}"

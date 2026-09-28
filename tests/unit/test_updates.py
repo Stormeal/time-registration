@@ -83,6 +83,25 @@ def test_download_checks_size_and_digest_before_returning(tmp_path) -> None:
     assert downloaded.read_bytes() == payload
 
 
+def test_download_reports_received_bytes_while_streaming(tmp_path) -> None:
+    payload = b"zip bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    responses = [Response(release_payload()), Response(payload)]
+    client = ReleaseClient(lambda *_args, **_kwargs: responses.pop(0))
+    update = client.check()
+    assert update is not None
+    update = replace(update, size=len(payload), sha256=digest)
+    progress: list[tuple[int, int]] = []
+
+    client.download(
+        update,
+        tmp_path / "update.zip",
+        progress=lambda received, total: progress.append((received, total)),
+    )
+
+    assert progress == [(9, 9)]
+
+
 def test_download_removes_a_package_that_fails_digest_verification(tmp_path) -> None:
     responses = [Response(release_payload()), Response(b"oops!")]
     client = ReleaseClient(lambda *_args, **_kwargs: responses.pop(0))

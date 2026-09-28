@@ -100,7 +100,12 @@ class ReleaseClient:
             return AvailableUpdate(version, url, digest.removeprefix("sha256:"), size)
         raise UpdateError("The release does not contain a valid update package.")
 
-    def download(self, update: AvailableUpdate, destination: Path) -> Path:
+    def download(
+        self,
+        update: AvailableUpdate,
+        destination: Path,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> Path:
         if not update.download_url.startswith(_ASSET_PREFIX):
             raise UpdateError("The update package URL is not trusted.")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +123,8 @@ class ReleaseClient:
                         raise UpdateError("The update package exceeded its published size.")
                     digest.update(chunk)
                     output.write(chunk)
+                    if progress is not None:
+                        progress(received, update.size)
             if received != update.size or digest.hexdigest() != update.sha256:
                 raise UpdateError("The update package failed its integrity check.")
         except (OSError, urllib.error.URLError, http.client.HTTPException) as error:

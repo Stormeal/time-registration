@@ -80,6 +80,7 @@ class UpdateCheckWorker(QThread):
 class UpdateDownloadWorker(QThread):
     downloaded = Signal(object)
     failed = Signal(str)
+    progress = Signal(int, int)
 
     def __init__(self, client: ReleaseClient, update: AvailableUpdate, destination: Path) -> None:
         super().__init__()
@@ -89,7 +90,13 @@ class UpdateDownloadWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.downloaded.emit(self._client.download(self._update, self._destination))
+            self.downloaded.emit(
+                self._client.download(
+                    self._update,
+                    self._destination,
+                    progress=self.progress.emit,
+                )
+            )
         except UpdateError as error:
             self.failed.emit(str(error))
 
@@ -132,6 +139,7 @@ class SettingsPage(QWidget):
         self._releases = releases
         self._update_worker: QThread | None = None
         self._pending_update: AvailableUpdate | None = None
+        self._update_progress: QProgressBar | None = None
 
         title = QLabel("Settings")
         font = title.font()
@@ -234,8 +242,14 @@ class SettingsPage(QWidget):
             self._check_updates.clicked.connect(self._check_for_updates)
             self._update_status = QLabel("Updates are checked only when you ask.")
             self._update_status.setWordWrap(True)
+            self._update_progress = QProgressBar()
+            self._update_progress.setRange(0, 100)
+            self._update_progress.setFormat("%p%")
+            self._update_progress.setAccessibleName("Update download progress")
+            self._update_progress.setVisible(False)
             app_form.addRow(self._check_updates)
             app_form.addRow("Updates", self._update_status)
+            app_form.addRow(self._update_progress)
         app_form.addRow(save_preferences)
         application_group = QGroupBox("Appearance and startup")
         application_group.setLayout(app_form)
@@ -624,6 +638,9 @@ class SettingsPage(QWidget):
     def _check_for_updates(self) -> None:
         if self._releases is None:
             return
+        if self._update_progress is not None:
+            self._update_progress.setValue(0)
+            self._update_progress.setVisible(False)
         self._check_updates.setEnabled(False)
         self._update_status.setText("Checking the QI Flow release service…")
         worker = UpdateCheckWorker(self._releases)
@@ -635,6 +652,8 @@ class SettingsPage(QWidget):
 
     def _update_check_finished(self, update: object) -> None:
         if update is None:
+            if self._update_progress is not None:
+                self._update_progress.setVisible(False)
             self._update_status.setText("QI Flow is up to date.")
             return
         releases = self._releases
@@ -650,18 +669,41 @@ class SettingsPage(QWidget):
             QMessageBox.StandardButton.No,
         )
         if answer is not QMessageBox.StandardButton.Yes:
+            if self._update_progress is not None:
+                self._update_progress.setVisible(False)
             self._update_status.setText(f"Version {update.version} is available.")
             return
         self._check_updates.setEnabled(False)
-        self._update_status.setText(f"Downloading version {update.version}…")
         self._pending_update = update
+        if self._update_progress is not None:
+            self._update_progress.setValue(0)
+            self._update_progress.setVisible(True)
+        self._set_update_download_status(0, update.size)
         destination = self._paths.data_dir / "updates" / f"QI-Flow-{update.version}.zip"
         worker = UpdateDownloadWorker(releases, update, destination)
+        worker.progress.connect(self._update_download_progress)
         worker.downloaded.connect(self._update_downloaded)
         worker.failed.connect(self._update_failed)
         worker.finished.connect(lambda: self._check_updates.setEnabled(True))
         self._update_worker = worker
         worker.start()
+
+    def _update_download_progress(self, received: int, total: int) -> None:
+        if total <= 0:
+            return
+        if self._update_progress is not None:
+            self._update_progress.setValue(min(100, received * 100 // total))
+        self._set_update_download_status(received, total)
+
+    def _set_update_download_status(self, received: int, total: int) -> None:
+        update = self._pending_update
+        if update is None:
+            return
+        mebibyte = 1024 * 1024
+        self._update_status.setText(
+            f"Downloading version {update.version}… "
+            f"{received / mebibyte:.1f} MB of {total / mebibyte:.1f} MB"
+        )
 
     def _update_downloaded(self, archive: object) -> None:
         if not isinstance(archive, Path):
@@ -670,6 +712,10 @@ class SettingsPage(QWidget):
         if self._pending_update is None:
             self._update_failed("No verified release information is available for this package.")
             return
+        if self._update_progress is not None:
+            self._update_progress.setValue(100)
+            self._update_progress.setVisible(False)
+        self._update_status.setText("Download verified. Preparing to install the update…")
         app_executable = Path(sys.executable).resolve()
         install_dir = app_executable.parent
         bundled_helper = install_dir / "QI Flow Updater.exe"
@@ -707,6 +753,8 @@ class SettingsPage(QWidget):
         QCoreApplication.quit()
 
     def _update_failed(self, message: str) -> None:
+        if self._update_progress is not None:
+            self._update_progress.setVisible(False)
         self._check_updates.setEnabled(True)
         self._update_status.setText(message)
         QMessageBox.warning(self, "QI Flow update", message)

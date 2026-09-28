@@ -99,13 +99,13 @@ def test_declining_an_update_does_not_download_the_package(
     paths.ensure()
     release = json.dumps(
         {
-            "tag_name": "v0.2.5",
+            "tag_name": "v0.2.6",
             "draft": False,
             "prerelease": False,
             "assets": [
                 {
                     "name": "QI-Flow-Update.zip",
-                    "browser_download_url": "https://github.com/Stormeal/time-registration/releases/download/v0.2.5/QI-Flow-Update.zip",
+                    "browser_download_url": "https://github.com/Stormeal/time-registration/releases/download/v0.2.6/QI-Flow-Update.zip",
                     "digest": "sha256:" + "a" * 64,
                     "size": 5,
                 }
@@ -137,10 +137,10 @@ def test_declining_an_update_does_not_download_the_package(
     qtbot.addWidget(page)
 
     page._check_updates.click()
-    qtbot.waitUntil(lambda: page._update_status.text() == "Version v0.2.5 is available.")
+    qtbot.waitUntil(lambda: page._update_status.text() == "Version v0.2.6 is available.")
 
     assert calls == 1
-    assert not (paths.data_dir / "updates" / "QI-Flow-v0.2.5.zip").exists()
+    assert not (paths.data_dir / "updates" / "QI-Flow-v0.2.6.zip").exists()
 
 
 def test_update_download_progress_is_visible_and_reports_received_size(
@@ -165,8 +165,8 @@ def test_update_download_progress_is_visible_and_reports_received_size(
         releases=ReleaseClient(lambda *_args, **_kwargs: Response(b"{}")),
     )
     update = AvailableUpdate(
-        "v0.2.5",
-        "https://github.com/Stormeal/time-registration/releases/download/v0.2.5/QI-Flow-Update.zip",
+        "v0.2.6",
+        "https://github.com/Stormeal/time-registration/releases/download/v0.2.6/QI-Flow-Update.zip",
         "a" * 64,
         104_857_600,
     )

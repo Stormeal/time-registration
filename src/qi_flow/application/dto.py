@@ -14,6 +14,13 @@ class StartWorkCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class StartWorkAtCommand:
+    """Start running work at a user-specified actual timestamp."""
+
+    started_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class FinishWorkCommand:
     occurred_at: datetime | None = None
 

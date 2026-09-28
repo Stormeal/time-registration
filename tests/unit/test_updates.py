@@ -18,7 +18,7 @@ class Response(io.BytesIO):
         self.close()
 
 
-def release_payload(version: str = "v0.2.4", digest: str | None = None) -> bytes:
+def release_payload(version: str = "v0.2.5", digest: str | None = None) -> bytes:
     return json.dumps(
         {
             "tag_name": version,
@@ -45,11 +45,11 @@ def test_release_check_finds_only_new_stable_versions() -> None:
     update = client.check()
 
     assert update is not None
-    assert update.version == "v0.2.4"
+    assert update.version == "v0.2.5"
     assert update.sha256 == "a" * 64
 
 
-@pytest.mark.parametrize("version", ["v0.2.3", "v0.2.2"])
+@pytest.mark.parametrize("version", ["v0.2.4", "v0.2.2"])
 def test_release_check_returns_none_when_not_newer(version: str) -> None:
     client = ReleaseClient(lambda *_args, **_kwargs: Response(release_payload(version)))
 
@@ -58,7 +58,7 @@ def test_release_check_returns_none_when_not_newer(version: str) -> None:
 
 @pytest.mark.parametrize(
     ("version", "digest"),
-    [("nightly", None), ("v0.2.4", "sha512:" + "a" * 128)],
+    [("nightly", None), ("v0.2.5", "sha512:" + "a" * 128)],
 )
 def test_release_check_rejects_untrusted_or_unversioned_metadata(
     version: str, digest: str | None

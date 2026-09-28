@@ -1,8 +1,41 @@
 # Work time tracker — design concept
 
-Version: 0.5 · Updated: 2026-09-15 · Status: iteration 1 approved; user stories drafted
+Version: 0.6 · Updated: 2026-09-28 · Status: compact design implemented; release smoke checks remain
 
 ## Direction
+
+### Selected direction — 28/09/2026
+
+The user selected **Compact utility** from the three design POCs. Use horizontal Today /
+Timesheet / Settings navigation and a compact tracking layout. Replace the main interface's
+teal accent with TestHuset orange `#F48F21` and warm grey `#695E4A`. Use the supplied transparent
+primary logo in light mode and the white alternative in dark mode, preserving their proportions
+without a backing panel. QI Flow remains the application name.
+
+The user subsequently approved the implementation plan and authorized implementation. The POC
+remains a sample-data layout reference; `docs/compact-design-review.md` records the functionality
+preservation matrix and verification. The existing app/tray icon remains. The earlier teal
+direction below describes the historical concept and is superseded for the main interface.
+
+The implemented Qt shell opens at 640×860 logical pixels, matching the selected tall compact
+view, and uses horizontal navigation with reflow at narrow widths. Today shows
+actual session time, lunch duration, allocated effective/provisional daily totals, weekly target
+progress, sessions and the existing correction routes. Daily context retains an explicit Save,
+preserves drafts across refresh/theme/navigation, and prompts at Copenhagen date rollover.
+Daily note is a separate Save/Cancel window, also available from the session editor. Its date
+stays bound while open across midnight; Cancel/close confirms discarding a changed draft.
+Today offers **Start at…** when stopped and **Change start…** when running. User-entered starts
+are exact manual minutes, persisted before the timer refreshes; future/overlapping starts and
+corrections that exclude a lunch/break remain rejected. A new specified start has the normal
+30-second Undo deadline measured from the action, rather than the historical start time.
+Tracking configuration (rounding, sleep and both reminders) is now in Settings, alongside the
+existing appearance/startup, backup, export, diagnostics, integration and update controls.
+Settings wheel gestures scroll the page without changing focused spin/date/dropdown fields;
+keyboard editing and explicit selection remain available. The correction editor uses a dedicated
+table pane, scrollable grouped controls, selection guidance and the existing recovery/history.
+Timesheet centers its month between Previous/Next and highlights all visible cells on hover.
+It retains all nine columns, every date in the month, ISO-week targets and selected-week
+registration actions. It refreshes persisted data when reopened and keeps the selected date/week.
 
 Product name: **QI Flow**. A quiet Windows utility with Segoe UI, restrained teal emphasis, generous readable spacing, and light/dark appearance following the system. The main action is always visible. The existing concept is a simulated interface created under the earlier working name “Worktime”; implementation should use QI Flow throughout.
 

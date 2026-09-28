@@ -59,7 +59,9 @@ class TrayPanel(QWidget):
         self._detail.setWordWrap(True)
 
         self._start_work = QPushButton("Start work")
+        self._start_work.setProperty("role", "primary")
         self._lunch = QPushButton("Start lunch")
+        self._lunch.setProperty("role", "primary")
         self._finish_work = QPushButton("Finish work")
         self._add_entry = QPushButton("Add entry")
         self._open_timesheet_button = QPushButton("Open timesheet")

@@ -108,7 +108,8 @@ def test_decimal_column_and_iso_week_group_selection(qtbot, tmp_path) -> None:
     page._tree.setCurrentItem(group)
     assert page._selected_week == IsoWeek(2026, 38)
     assert group.child(0).text(page._COLUMNS.index("Decimal hours")) == "7.75"
-    assert page._testhuset_button.text() == "Review & insert EazyProject hours — week 38, 2026"
+    assert page._testhuset_button.isEnabled()
+    assert "2026" in page._week_summary.text()
 
 
 def test_double_clicking_a_day_opens_its_session_editor(qtbot, tmp_path, monkeypatch) -> None:

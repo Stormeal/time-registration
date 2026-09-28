@@ -12,13 +12,19 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
+    QHeaderView,
+    QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QTextEdit,
     QTimeEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from qi_flow.application.dto import (
@@ -32,6 +38,7 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import Deduction, DeductionKind, WorkLocation, WorkSession
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.daily_note_dialog import DailyNoteDialog
 from qi_flow.ui.history_dialog import HistoryDialog
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
@@ -50,9 +57,17 @@ class SessionEditorDialog(QDialog):
         self._work_date = work_date
         self._testhuset = testhuset
         self.setWindowTitle(f"Edit sessions - {work_date:%d/%m/%Y}")
-        self.resize(620, 420)
+        self.resize(840, 600)
         self._tree = QTreeWidget()
         self._tree.setHeaderLabels(("Type", "Start", "Finish"))
+        self._tree.setMinimumSize(260, 200)
+        self._tree.setUniformRowHeights(True)
+        self._tree.header().setStretchLastSection(False)
+        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2):
+            self._tree.header().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._tree.itemSelectionChanged.connect(self._load_selected)
         self._start = QTimeEdit()
         self._end = QTimeEdit()
@@ -60,8 +75,10 @@ class SessionEditorDialog(QDialog):
             editor.setDisplayFormat("HH:mm")
             editor.setEnabled(False)
         self._save = QPushButton("Save correction")
+        self._save.setProperty("role", "primary")
         self._save.setEnabled(False)
         self._delete = QPushButton("Delete selected")
+        self._delete.setToolTip("Deleted entries can be restored from history for 30 days.")
         self._delete.setEnabled(False)
         self._add_lunch = QPushButton("Add lunch")
         self._add_lunch.setEnabled(False)
@@ -73,17 +90,25 @@ class SessionEditorDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         form = QFormLayout()
+        self._selection_help = QLabel()
+        self._selection_help.setWordWrap(True)
+        form.addRow(self._selection_help)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.addRow("Start", self._start)
         form.addRow("Finish", self._end)
         form.addRow(self._save, self._delete)
         self._office = QCheckBox("Worked from office")
-        self._note = QTextEdit()
+        self._note = QTextEdit(self)
+        self._note.hide()
         self._note.setPlaceholderText("Daily note")
         self._save_office = QPushButton("Save daily context")
         self._save_office.clicked.connect(self._save_office_status)
-        form.addRow(self._office)
-        form.addRow("Note", self._note)
-        form.addRow(self._save_office)
+        self._edit_note = QPushButton("Daily note…")
+        self._edit_note.clicked.connect(self._open_daily_note)
+        context_form = QVBoxLayout()
+        context_form.addWidget(self._office)
+        context_form.addWidget(self._edit_note)
+        context_form.addWidget(self._save_office)
         self._task = QComboBox()
         self._task.addItem("Use configured default", None)
         if testhuset is not None:
@@ -96,19 +121,50 @@ class SessionEditorDialog(QDialog):
         self._save_task.clicked.connect(self._assign_task)
         self._task.setEnabled(False)
         self._save_task.setEnabled(False)
-        if testhuset is not None:
-            form.addRow("Testhuset task", self._task)
-            form.addRow(self._save_task)
+        form.addRow(self._add_lunch)
         layout = QVBoxLayout(self)
-        layout.addWidget(self._tree)
-        layout.addLayout(form)
-        layout.addWidget(self._add_lunch)
-        layout.addWidget(self._history)
+        layout.setContentsMargins(20, 20, 20, 20)
+        guidance = QLabel(
+            "Select a session or lunch to correct its times. Changes save explicitly."
+        )
+        guidance.setWordWrap(True)
+        layout.addWidget(guidance)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self._tree, 1)
+        left_layout.addWidget(self._history)
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        correction = QGroupBox("Selected entry")
+        correction.setLayout(form)
+        controls_layout.addWidget(correction)
+        context = QGroupBox(f"Daily context · {work_date:%d/%m/%Y}")
+        context.setLayout(context_form)
+        controls_layout.addWidget(context)
+        if testhuset is not None:
+            task_group = QGroupBox("Task assignment")
+            task_layout = QVBoxLayout(task_group)
+            task_layout.addWidget(self._task)
+            task_layout.addWidget(self._save_task)
+            controls_layout.addWidget(task_group)
+        controls_layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(controls)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left)
+        splitter.addWidget(scroll)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([380, 400])
+        layout.addWidget(splitter, 1)
         layout.addWidget(buttons)
         self._load_office_status()
         self._refresh()
 
     def _refresh(self) -> None:
+        selected = self._selected_value()
+        selected_id = selected.id if selected is not None else None
         self._tree.clear()
         for session in self._service.completed_sessions_for_day(self._work_date):
             if session.actual_started_at.astimezone(COPENHAGEN).date() != self._work_date:
@@ -132,6 +188,18 @@ class SessionEditorDialog(QDialog):
                 )
             )
         self._tree.expandAll()
+        first = self._tree.topLevelItem(0)
+        if first is not None:
+            self._tree.setCurrentItem(first)
+        for row in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(row)
+            assert item is not None
+            for candidate in [item, *(item.child(i) for i in range(item.childCount()))]:
+                if candidate is None:
+                    continue
+                value = candidate.data(0, Qt.ItemDataRole.UserRole)
+                if value.id == selected_id:
+                    self._tree.setCurrentItem(candidate)
 
     def _item(
         self, label: str, value: WorkSession | Deduction, started: datetime, ended: datetime | None
@@ -146,6 +214,13 @@ class SessionEditorDialog(QDialog):
         self._task.setEnabled(isinstance(selected, WorkSession))
         self._save_task.setEnabled(isinstance(selected, WorkSession))
         is_running_session = isinstance(selected, WorkSession) and selected.is_active
+        self._selection_help.setText(
+            "Running session: correct the start here. Finish work from Today."
+            if is_running_session
+            else "Adjust the selected interval, then save your correction."
+            if enabled
+            else "Choose a work session or lunch from the table."
+        )
         self._add_lunch.setEnabled(isinstance(selected, WorkSession) and not is_running_session)
         if isinstance(selected, WorkSession):
             index = self._task.findData(selected.testhuset_task_id)
@@ -163,6 +238,10 @@ class SessionEditorDialog(QDialog):
             self._start.setTime(self._as_qtime(selected.actual_started_at))
         if selected is not None and selected.actual_ended_at is not None:
             self._end.setTime(self._as_qtime(selected.actual_ended_at))
+        self._loaded_interval = (
+            self._start.time().toString("HH:mm"),
+            self._end.time().toString("HH:mm"),
+        )
 
     def _save_selected(self) -> None:
         selected = self._selected_value()
@@ -242,6 +321,12 @@ class SessionEditorDialog(QDialog):
             )
         )
 
+    def _open_daily_note(self) -> None:
+        dialog = DailyNoteDialog(self._work_date, self._note.toPlainText(), self)
+        if dialog.exec():
+            self._note.setPlainText(dialog.note())
+            self._save_office_status()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()
         self.reject()
@@ -253,13 +338,10 @@ class SessionEditorDialog(QDialog):
         selected = self._selected_value()
         dirty_interval = False
         if selected is not None:
-            dirty_interval = self._as_copenhagen(
-                self._work_date, self._start.time()
-            ) != selected.actual_started_at or (
-                selected.actual_ended_at is not None
-                and self._as_copenhagen(self._work_date, self._end.time())
-                != selected.actual_ended_at
-            )
+            dirty_interval = (
+                self._start.time().toString("HH:mm"),
+                self._end.time().toString("HH:mm"),
+            ) != self._loaded_interval
         if (
             self._office.isChecked() != saved_office
             or self._note.toPlainText() != saved_note

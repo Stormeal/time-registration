@@ -161,14 +161,6 @@ def run(argv: list[str] | None = None) -> int:
         GoogleOAuthStore(),
         ReleaseClient(),
     )
-    preferences = service.app_preferences()
-    if preferences.theme == "dark":
-        app.setStyleSheet(
-            "QWidget { background: #1f2929; color: #e9f5f3; } "
-            "QPushButton { background: #087f78; padding: 6px; }"
-        )
-    elif preferences.theme == "light":
-        app.setStyleSheet("QPushButton { background: #087f78; color: white; padding: 6px; }")
     guard.focus_requested.connect(window.reveal)
 
     icon = QIcon(str(files("qi_flow.assets").joinpath("qiflow-icon.svg")))

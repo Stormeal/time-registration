@@ -526,3 +526,68 @@ Acceptance criteria:
 - User stories: awaiting review.
 - Development: US01–US08, US09–US20, US22–US27 are implemented and verified; US21 and
   US28–US30 remain in progress, and US31 has not started.
+## Epic L — Compact application design
+
+### US33 — Modernize the interface while preserving workflows · P1
+
+Implementation status: **Complete** · 28/09/2026. Quality gate: 184 tests, formatting, lint and strict mypy pass; both independent review findings have failing-then-passing regression tests. Wheel logos verified unchanged. Offscreen Qt scaling verified; manual monitor/keyboard, clean-account installer and live integration checks remain release work.
+
+As a daily QI Flow user, I want a compact, branded interface so that tracking and review remain
+easy without losing existing functionality.
+
+Acceptance criteria:
+
+- Use the supplied transparent TestHuset primary/white dark logos, orange and warm grey, preserving
+  QI Flow's name. System/Light/Dark changes apply without rebuilding pages or discarding edits.
+- Today/Timesheet/Settings remain accessible through horizontal navigation and existing tray routes;
+  closing the window continues tracking in the tray.
+- Today retains Start/Lunch/End lunch/Finish, Undo, recovery, manual entry, full session editing and
+  task assignment, office/note Save. Show actual session/lunch time and effective/provisional day
+  and week totals using application queries and the injected clock.
+- Unsaved daily context survives timer refresh, theme changes and navigation. Date rollover offers
+  Save/Discard/Cancel and never saves yesterday's draft to today's date implicitly.
+- Settings retains configurable rounding, default target, sleep and both reminders, including
+  independent thresholds/help, plus existing startup, backup, export, diagnostics, integration and
+  update controls.
+- Timesheet retains all nine fields, every calendar day grouped by ISO week, weekly target overrides,
+  full editors/history and selected-week registration actions. Returning refreshes persisted totals
+  and preserves selected date/week.
+- Controls remain reachable in a 640×520 logical window with reflow/scrolling; light/dark Qt previews
+  cover scale factors 1, 1.25, 1.5 and 2. Both supplied logos are included unchanged in a built wheel.
+- The complete quality gate and automated tracking → lunch → finish → second session → correction
+  → reopen → summary/detailed CSV flow pass. Existing recovery, history, tray and integration tests
+  continue passing. No unfinished integration or release smoke check is declared complete.
+
+### US34 — Refine compact usability and recover a forgotten start · P1
+
+Implementation status: **Complete** · 28/09/2026. User requested seven concrete improvements.
+
+As a daily user, I want a readable compact window and direct correction shortcuts so that reviewing
+sessions, writing notes and recovering a forgotten timer start are quick and predictable.
+
+Acceptance criteria:
+
+- Default main client size approximately640x860 logical pixels, matching the supplied screenshot.
+- Timesheet hover highlights the full visible row; the selected month sits between Previous/Next.
+- Session editor keeps the table readable alongside scrollable correction/context/task controls,
+  selects an entry when available, preserves selection on refresh and retains save/delete/history.
+- Daily note uses a separate Save/Cancel dialog from Today and the session editor. Cancel preserves
+  the saved note and confirms changed-draft discard; a dialog open across midnight saves to its
+  original date. Office context and exact-note content remain supported.
+- Settings wheel input scrolls the page without changing spin/date/dropdown values, even when
+  focused; explicit keyboard edits and selections continue working.
+- Today provides Start at when stopped and Change start when running. User-entered starts use
+  Copenhagen time, exact manual minutes and existing persistence/containment rules. Future/overlap
+  and unresolved recovery states remain blocked, including states arising while the dialog is open.
+- Timer begins from the specified actual instant; correcting a running start retains session ID
+  and deductions. A new specified start retains30-second Undo from the action instant.
+- Untouched sessions with nonzero timestamp seconds close without false discard prompts; changed
+  visible values still trigger the existing unsaved-correction safeguard.
+
+Verification: scripts/check.ps1 passes203 tests, Ruff formatting/lint and strict mypy56 source
+files. Owning-layer and Qt interaction regressions cover these criteria; both independent review
+findings were reproduced RED, fixed GREEN and included in the full suite. Real offscreen Qt light/
+dark previews at640x860,640x520 and100/125/150/200% were inspected with Windows fonts. Manual
+monitor/keyboard, production data, installer and authenticated live integration checks remain
+release work. Existing cross-midnight time-only correction and switching rows with unsaved interval
+edits remain pre-existing editor limitations outside this follow-up.

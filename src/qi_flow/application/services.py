@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 
 from qi_flow.application.dto import (
@@ -11,6 +11,7 @@ from qi_flow.application.dto import (
     FinishDeductionCommand,
     FinishWorkCommand,
     StartDeductionCommand,
+    StartWorkAtCommand,
     StartWorkCommand,
     UpdateDayDetailsCommand,
 )
@@ -25,6 +26,10 @@ class TimeTrackingService(Protocol):
 
     def start_work(self, command: StartWorkCommand) -> ActiveStateView: ...
 
+    def start_work_at(self, command: StartWorkAtCommand) -> ActiveStateView: ...
+
+    def current_time(self) -> datetime: ...
+
     def finish_work(self, command: FinishWorkCommand) -> ActiveStateView: ...
 
     def start_deduction(self, command: StartDeductionCommand) -> ActiveStateView: ...
@@ -38,3 +43,7 @@ class TimeTrackingService(Protocol):
     def month(self, year: int, month: int) -> list[DaySummaryView]: ...
 
     def day(self, work_date: date) -> DaySummaryView: ...
+
+    def today_summary(self) -> DaySummaryView: ...
+
+    def active_lunch_seconds(self) -> int: ...

@@ -21,6 +21,7 @@ from qi_flow.application.dto import (
     ReminderView,
     SleepGapView,
     StartDeductionCommand,
+    StartWorkAtCommand,
     StartWorkCommand,
     UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
@@ -161,6 +162,7 @@ class TimeTrackingApplicationService:
 
     def update_active_work_start(self, command: UpdateActiveWorkStartCommand) -> WorkSession:
         """Correct a running session's start without stopping its timer."""
+        self._ensure_no_pending_sleep_gap()
         start = self._when(command.started_at)
         now = self._when(None)
         if start >= now:
@@ -169,6 +171,7 @@ class TimeTrackingApplicationService:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise InvalidStateTransitionError("Choose the running work session to correct.")
+            self._ensure_not_blocked(session, now)
             self._ensure_session_has_no_overlap(uow, start, now, session.id)
             deductions = uow.deductions.list_for_session(session.id)
             if any(
@@ -478,6 +481,20 @@ class TimeTrackingApplicationService:
         month_start = date(year, month, 1)
         month_end = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
         return self._summaries_for_range(month_start, month_end)
+
+    def today_summary(self) -> DaySummaryView:
+        """Return today's effective allocated total using the injected clock."""
+        today = self._when(None).astimezone(COPENHAGEN).date()
+        return self._summaries_for_range(today, today + timedelta(days=1))[0]
+
+    def active_lunch_seconds(self) -> int:
+        """Expose actual lunch elapsed time from the same injected clock as work."""
+        now = self._when(None)
+        state = self.active_state(now)
+        if state.active_deduction_kind is not DeductionKind.LUNCH:
+            return 0
+        start = state.actual_deduction_started_at
+        return max(0, int((now - start).total_seconds())) if start is not None else 0
 
     def summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
         """Return one rounded, local-calendar summary per day in ``[start, end)``."""
@@ -864,6 +881,32 @@ class TimeTrackingApplicationService:
                         )
                     )
             uow.settings.save("pending_sleep_gap", None, now)
+        return self.active_state(now)
+
+    def current_time(self) -> datetime:
+        """Expose the injected clock for user-entered start-time defaults."""
+        return self._when(None)
+
+    def start_work_at(self, command: StartWorkAtCommand) -> ActiveStateView:
+        """Begin exact-minute manual work while retaining a running timer."""
+        start = self._when(command.started_at)
+        now = self._when(None)
+        if start > now:
+            raise InvalidIntervalError("The start time cannot be in the future.")
+        self._ensure_no_pending_sleep_gap()
+        with self._uow_factory() as uow:
+            self._ensure_no_blocking_session(uow.sessions.get_active(), now)
+            self._ensure_session_has_no_overlap(uow, start, now)
+            session = WorkSession(
+                id=self._identifiers.session_id(),
+                actual_started_at=start,
+                source=EntrySource.MANUAL,
+                created_at=now,
+                updated_at=now,
+                rounding_minutes=1,
+            )
+            uow.sessions.add(session)
+        self._undo_action = _UndoAction("start", str(session.id), now)
         return self.active_state(now)
 
     def start_work(self, command: StartWorkCommand) -> ActiveStateView:

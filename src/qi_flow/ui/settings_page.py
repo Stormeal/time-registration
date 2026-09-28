@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QDate, QProcess, QThread, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from qi_flow.application.dsb import DsbService
+from qi_flow.application.dto import ReminderSettingsView
 from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.google_sync_service import GoogleSyncService
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
@@ -40,6 +42,7 @@ from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient, UpdateError
+from qi_flow.ui.controls import SettingsWheelGuard
 from qi_flow.ui.testhuset_credentials_dialog import TesthusetCredentialsDialog
 from qi_flow.ui.testhuset_dialog import SheetFactory, TesthusetDialog
 
@@ -165,16 +168,43 @@ class SettingsPage(QWidget):
         for minutes in (1, 5, 10, 15):
             self._rounding.addItem(f"{minutes} minutes", minutes)
         self._rounding.setCurrentIndex((1, 5, 10, 15).index(preferences.rounding_minutes))
+        self._rounding.setToolTip(
+            "Rounds work starts down and finishes up; lunch boundaries use nearest rounding. "
+            "Changes apply to future timer actions only."
+        )
         self._target = QSpinBox()
         self._target.setRange(0, 100)
         self._target.setSuffix(" hours")
         self._target.setValue(preferences.weekly_target_minutes // 60)
         self._sleep_enabled = QCheckBox("Detect long sleep gaps")
         self._sleep_enabled.setChecked(preferences.sleep_enabled)
+        self._sleep_enabled.setToolTip(
+            "Prompts you to resolve a Windows sleep gap. QI Flow never removes time automatically."
+        )
         self._sleep_minutes = QSpinBox()
         self._sleep_minutes.setRange(1, 240)
         self._sleep_minutes.setSuffix(" minutes")
         self._sleep_minutes.setValue(preferences.sleep_threshold_minutes)
+        self._sleep_minutes.setToolTip("Prompts for a decision after a sleep gap longer than this.")
+        reminders = service.reminder_settings()
+        self._work_reminder_enabled = QCheckBox("Remind after long work")
+        self._work_reminder_enabled.setChecked(reminders.work_enabled)
+        self._work_reminder_enabled.setToolTip(
+            "Shows a reminder after elapsed work, including lunch."
+        )
+        self._work_reminder_minutes = QSpinBox()
+        self._work_reminder_minutes.setRange(1, 24 * 60)
+        self._work_reminder_minutes.setSuffix(" minutes")
+        self._work_reminder_minutes.setValue(reminders.work_minutes)
+        self._work_reminder_minutes.setToolTip("Sets the elapsed-work reminder threshold.")
+        self._lunch_reminder_enabled = QCheckBox("Remind after long lunch")
+        self._lunch_reminder_enabled.setChecked(reminders.lunch_enabled)
+        self._lunch_reminder_enabled.setToolTip("Shows a reminder when lunch reaches this length.")
+        self._lunch_reminder_minutes = QSpinBox()
+        self._lunch_reminder_minutes.setRange(1, 240)
+        self._lunch_reminder_minutes.setSuffix(" minutes")
+        self._lunch_reminder_minutes.setValue(reminders.lunch_minutes)
+        self._lunch_reminder_minutes.setToolTip("Sets the active-lunch reminder threshold.")
         self._theme = QComboBox()
         self._theme.addItem("System", "system")
         self._theme.addItem("Light", "light")
@@ -183,12 +213,20 @@ class SettingsPage(QWidget):
         self._startup_enabled = QCheckBox("Start QI Flow with Windows")
         self._startup_enabled.setChecked(startup.is_enabled())
         save_preferences = QPushButton("Save application settings")
+        save_preferences.setProperty("role", "primary")
         save_preferences.clicked.connect(self._save_preferences)
+        tracking_form = QFormLayout()
+        tracking_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        tracking_form.addRow("Rounding", self._rounding)
+        tracking_form.addRow("Default weekly target", self._target)
+        tracking_form.addRow(self._sleep_enabled)
+        tracking_form.addRow("Sleep prompt after", self._sleep_minutes)
+        tracking_form.addRow(self._work_reminder_enabled, self._work_reminder_minutes)
+        tracking_form.addRow(self._lunch_reminder_enabled, self._lunch_reminder_minutes)
+        tracking_group = QGroupBox("Tracking")
+        tracking_group.setLayout(tracking_form)
         app_form = QFormLayout()
-        app_form.addRow("Rounding", self._rounding)
-        app_form.addRow("Default weekly target", self._target)
-        app_form.addRow(self._sleep_enabled)
-        app_form.addRow("Sleep prompt after", self._sleep_minutes)
+        app_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         app_form.addRow("Theme", self._theme)
         app_form.addRow(self._startup_enabled)
         if releases is not None:
@@ -199,7 +237,7 @@ class SettingsPage(QWidget):
             app_form.addRow(self._check_updates)
             app_form.addRow("Updates", self._update_status)
         app_form.addRow(save_preferences)
-        application_group = QGroupBox("Application")
+        application_group = QGroupBox("Appearance and startup")
         application_group.setLayout(app_form)
 
         self._scope = QComboBox()
@@ -231,8 +269,10 @@ class SettingsPage(QWidget):
         diagnostics_group.setLayout(diagnostics_form)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 32, 32, 32)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
         layout.addWidget(title)
+        layout.addWidget(tracking_group)
         layout.addWidget(application_group)
         if google_sync is not None:
             sync_group = QGroupBox("Google Sheets sync")
@@ -318,7 +358,12 @@ class SettingsPage(QWidget):
         layout.addWidget(export_group)
         layout.addWidget(diagnostics_group)
         layout.addStretch(1)
+        for settings_form in self.findChildren(QFormLayout):
+            settings_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.refresh()
+        self._wheel_guard = SettingsWheelGuard(self)
+        for field in [*self.findChildren(QAbstractSpinBox), *self.findChildren(QComboBox)]:
+            field.installEventFilter(self._wheel_guard)
 
     def refresh(self) -> None:
         status = self._backups.status()
@@ -560,6 +605,14 @@ class SettingsPage(QWidget):
                 )
             )
             self._startup.set_enabled(self._startup_enabled.isChecked())
+            self._service.set_reminder_settings(
+                ReminderSettingsView(
+                    work_enabled=self._work_reminder_enabled.isChecked(),
+                    work_minutes=self._work_reminder_minutes.value(),
+                    lunch_enabled=self._lunch_reminder_enabled.isChecked(),
+                    lunch_minutes=self._lunch_reminder_minutes.value(),
+                )
+            )
             self._service.complete_setup()
             self.preferences_saved.emit()
         except (RuntimeError, ValueError) as error:

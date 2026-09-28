@@ -26,7 +26,8 @@ def test_show_timesheet_reveals_the_window_on_the_timesheet_page(qtbot: QtBot) -
     window.show_timesheet()
 
     assert window.isVisible()
-    assert window._navigation.currentRow() == window._page_index["Timesheet"]
+    assert window._navigation.currentIndex() == window._page_index["Timesheet"]
+    assert window._pages.currentIndex() == window._page_index["Timesheet"]
 
 
 def test_show_settings_reveals_the_window_on_the_settings_page(qtbot: QtBot) -> None:
@@ -37,7 +38,8 @@ def test_show_settings_reveals_the_window_on_the_settings_page(qtbot: QtBot) -> 
     window.show_settings()
 
     assert window.isVisible()
-    assert window._navigation.currentRow() == window._page_index["Settings"]
+    assert window._navigation.currentIndex() == window._page_index["Settings"]
+    assert window._pages.currentIndex() == window._page_index["Settings"]
 
 
 def test_navigation_shows_the_application_version_at_its_bottom(qtbot: QtBot) -> None:

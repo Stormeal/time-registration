@@ -1,6 +1,6 @@
 # QI Flow — active user stories
 
-Version: 1.2 · Updated: 2026-09-27 · Status: active backlog only
+Version: 1.3 · Updated: 2026-09-28 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
@@ -101,7 +101,8 @@ As a DSB consultant, I want to review and insert a selected ISO week's completed
 Acceptance criteria:
 
 - Settings opt-in, allocation scanning, and the default allocation remain per-user and disabled unless the user enables DSB time registration.
-- Selecting a Timesheet date exposes **Review & insert DSB hours — week X, YYYY** only when DSB is enabled.
+- Selecting a Timesheet date enables **Review & insert DSB hours** only when DSB is enabled;
+  the selected ISO week number and year remain visible in the adjacent week summary.
 - The review lists the chosen week, allocation, QI Flow decimal hours, existing DSB hours, and a per-row keep-or-replace decision before any external value is changed.
 - The DSB browser uses the selected ISO week, fills only confirmed rows, then uses DSB's **Send** action. It never approves or locks the week.
 - Any uncertain browser result stops the operation and requires a fresh review; it never retries or approves a week automatically.
@@ -146,5 +147,5 @@ Acceptance criteria:
 
 - Requirements and decision interview: approved.
 - Completed stories: archived in `USER_STORIES_ARCHIVE.md`.
-- US05–US08 (Epic B), US01–US04, US09–US20, and US22–US27 are implemented and verified.
+- US05–US08 (Epic B), US01–US04, US09–US20, US22–US27 and US33–US34 are implemented and verified.
 - US21 and US28–US32 remain in progress or not started as shown above.

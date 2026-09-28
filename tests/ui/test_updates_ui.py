@@ -61,7 +61,7 @@ def test_settings_can_check_release_feed_without_blocking_the_ui(tmp_path, qtbot
     paths.ensure()
     release = json.dumps(
         {
-            "tag_name": "v0.2.3",
+            "tag_name": "v0.2.4",
             "draft": False,
             "prerelease": False,
             "assets": [],
@@ -98,13 +98,13 @@ def test_declining_an_update_does_not_download_the_package(
     paths.ensure()
     release = json.dumps(
         {
-            "tag_name": "v0.2.4",
+            "tag_name": "v0.2.5",
             "draft": False,
             "prerelease": False,
             "assets": [
                 {
                     "name": "QI-Flow-Update.zip",
-                    "browser_download_url": "https://github.com/Stormeal/time-registration/releases/download/v0.2.4/QI-Flow-Update.zip",
+                    "browser_download_url": "https://github.com/Stormeal/time-registration/releases/download/v0.2.5/QI-Flow-Update.zip",
                     "digest": "sha256:" + "a" * 64,
                     "size": 5,
                 }
@@ -136,7 +136,7 @@ def test_declining_an_update_does_not_download_the_package(
     qtbot.addWidget(page)
 
     page._check_updates.click()
-    qtbot.waitUntil(lambda: page._update_status.text() == "Version v0.2.4 is available.")
+    qtbot.waitUntil(lambda: page._update_status.text() == "Version v0.2.5 is available.")
 
     assert calls == 1
-    assert not (paths.data_dir / "updates" / "QI-Flow-v0.2.4.zip").exists()
+    assert not (paths.data_dir / "updates" / "QI-Flow-v0.2.5.zip").exists()

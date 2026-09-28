@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -23,6 +25,7 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import IsoWeek
 from qi_flow.domain.testhuset import decimal_hours
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.controls import RowHoverTree
 from qi_flow.ui.formatting import format_duration
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 from qi_flow.ui.session_editor_dialog import SessionEditorDialog
@@ -64,6 +67,9 @@ class TimesheetPage(QWidget):
         self._selected_date: datetime | None = None
 
         self._month_label = QLabel()
+        self._month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._month_label.setWordWrap(True)
+        self._month_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         title_font = self._month_label.font()
         title_font.setPointSize(18)
         title_font.setBold(True)
@@ -73,13 +79,16 @@ class TimesheetPage(QWidget):
         previous.clicked.connect(lambda: self._change_month(-1))
         next_month.clicked.connect(lambda: self._change_month(1))
 
-        self._tree = QTreeWidget()
+        self._tree = RowHoverTree()
         self._tree.setHeaderLabels(self._COLUMNS)
         self._tree.setRootIsDecorated(True)
+        self._tree.setUniformRowHeights(True)
+        self._tree.header().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._tree.itemSelectionChanged.connect(self._select_day)
         self._tree.itemDoubleClicked.connect(self._open_item_editor)
 
         self._week_summary = QLabel("Select a day to review its ISO week.")
+        self._week_summary.setWordWrap(True)
         self._target_hours = QSpinBox()
         self._target_hours.setRange(0, 100)
         self._target_hours.setSuffix(" hours weekly target")
@@ -96,13 +105,17 @@ class TimesheetPage(QWidget):
         navigation.addWidget(self._month_label, 1)
         navigation.addWidget(next_month)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 32, 32, 32)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
         layout.addLayout(navigation)
         layout.addWidget(self._tree, 1)
         layout.addWidget(self._week_summary)
         layout.addWidget(self._target_hours)
-        layout.addWidget(self._add_entry)
-        layout.addWidget(self._edit_sessions)
+        edit_actions = QHBoxLayout()
+        edit_actions.addWidget(self._add_entry)
+        edit_actions.addWidget(self._edit_sessions)
+        edit_actions.addStretch(1)
+        layout.addLayout(edit_actions)
         self._testhuset_button = QPushButton("Review & insert EazyProject hours")
         self._testhuset_button.setEnabled(False)
         self._testhuset_button.clicked.connect(self._open_testhuset)
@@ -118,6 +131,16 @@ class TimesheetPage(QWidget):
 
     def refresh(self) -> None:
         """Rebuild the grouped list from persisted timesheet summaries."""
+        selected_key = None
+        current = self._tree.currentItem()
+        if current is not None:
+            selected_value = current.data(0, Qt.ItemDataRole.UserRole)
+            selected_key = (
+                selected_value.work_date
+                if isinstance(selected_value, DaySummaryView)
+                else selected_value
+            )
+        self._tree.blockSignals(True)
         self._month_label.setText(datetime(self._year, self._month, 1).strftime("%B %Y"))
         self._tree.clear()
         groups: dict[IsoWeek, QTreeWidgetItem] = {}
@@ -129,13 +152,27 @@ class TimesheetPage(QWidget):
                 group = QTreeWidgetItem([f"Week {iso_number}", "", "", "", "", "", "", ""])
                 group.setData(0, Qt.ItemDataRole.UserRole, iso_week)
                 group.setFirstColumnSpanned(True)
+                font = QFont(self._tree.font())
+                font.setBold(True)
+                group.setFont(0, font)
                 self._tree.addTopLevelItem(group)
                 groups[iso_week] = group
-            group.addChild(self._day_item(summary))
+            child = self._day_item(summary)
+            group.addChild(child)
+            if summary.work_date == selected_key:
+                self._tree.setCurrentItem(child)
+        if isinstance(selected_key, IsoWeek) and selected_key in groups:
+            self._tree.setCurrentItem(groups[selected_key])
         self._tree.expandAll()
         self._tree.resizeColumnToContents(0)
+        self._tree.blockSignals(False)
+        self._select_day()
         if self._selected_week is not None:
             self._show_week(self._selected_week)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self.refresh()
 
     def _day_item(self, summary: DaySummaryView) -> QTreeWidgetItem:
         suffix = " (provisional)" if summary.is_provisional else ""
@@ -153,6 +190,10 @@ class TimesheetPage(QWidget):
             ]
         )
         item.setData(0, Qt.ItemDataRole.UserRole, summary)
+        for column in (3, 4, 5, 6):
+            item.setTextAlignment(
+                column, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
         return item
 
     def _select_day(self) -> None:
@@ -173,20 +214,17 @@ class TimesheetPage(QWidget):
     def _show_week(self, iso_week: IsoWeek) -> None:
         self._selected_week = iso_week
         self._testhuset_button.setEnabled(True)
-        self._testhuset_button.setText(
-            f"Review & insert EazyProject hours — week {iso_week.week}, {iso_week.year}"
-        )
+        self._testhuset_button.setText("Review & insert EazyProject hours")
         if self._dsb is not None:
-            self._dsb_button.setText(
-                f"Review & insert DSB hours — week {iso_week.week}, {iso_week.year}"
-            )
+            self._dsb_button.setText("Review & insert DSB hours")
             self.refresh_dsb_availability()
         progress = self._service.weekly_progress(iso_week)
         decimal = progress.logged_seconds / 3600
         difference = progress.difference_seconds
         relation = "remaining" if difference < 0 else "excess"
         self._week_summary.setText(
-            f"Week {iso_week.week}: {format_duration(progress.logged_seconds)[:5]} "
+            f"Week {iso_week.week}, {iso_week.year}: "
+            f"{format_duration(progress.logged_seconds)[:5]} "
             f"({decimal:.2f} hours); {format_duration(abs(difference))[:5]} {relation}."
         )
         self._target_hours.blockSignals(True)

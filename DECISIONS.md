@@ -89,7 +89,9 @@ This file records the shared understanding reached during the design interview. 
 | ID | Confirmed decision |
 | --- | --- |
 | D070 | Use English UI labels with Danish date/time conventions, 24-hour time, ISO week numbers, and Europe/Copenhagen time. |
-| D071 | Follow the Windows light/dark setting by default, with Light and Dark overrides. Retain the restrained teal visual direction and create a simple QI app/tray icon. |
+| D071 | Follow the Windows light/dark setting by default, with Light and Dark overrides. The selected main-interface redesign uses TestHuset orange `#F48F21` and warm grey `#695E4A`, the transparent primary logo for light mode, and the white alternative for dark mode. QI Flow remains the application name; existing QI app/tray icons remain until an icon change is separately reviewed. |
+| D074 | Compact utility is the approved redesign direction, with horizontal Today / Timesheet / Settings navigation; the user approved its implementation plan and authorized implementation on 28/09/2026. Compactness must preserve access to every existing function and all accepted validation, persistence, recovery, privacy, and integration safeguards. Tracking configuration belongs in Settings; Today retains tracking, recovery, correction and daily context. The POC is a layout reference and does not replace required workflows. |
+| D075 | The compact shell defaults to approximately 640×860 logical pixels. Daily notes open in a dedicated Save/Cancel dialog; Settings wheel gestures scroll the page without changing field values. Today offers an explicit actual start-time dialog both to start forgotten work and to correct a running session, using existing exact-minute manual semantics, validation and persistence. A historical new start's Undo deadline is measured from the user action. |
 | D072 | First launch presents one compact setup screen with defaults: 5-minute rounding, 37-hour target, startup disabled, 9-hour and 45-minute reminders enabled, 30-minute sleep prompt enabled, System theme, and 30 daily backups. |
 | D073 | Global keyboard shortcuts are outside iteration 1. |
 | D090 | Testhuset login is performed directly by the user in a temporary Playwright browser session. QI Flow never persists credentials, browser cookies, or tokens; diagnostic logs exclude authentication and time-entry contents. |
@@ -116,6 +118,10 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-09-28: User selected the Compact utility POC and supplied transparent primary and dark
+  logos. D071 revises the proposed main-interface branding; D074 requires functionality parity.
+  `docs/compact-design-review.md` records POC gaps and the requirements-preservation checklist.
+  Archived teal appearance criteria remain historical; current appearance follows revised D071.
 - 2026-09-15: v1.0 confirmed after four design-interview rounds and explicit shared-understanding confirmation.
 - 2026-09-17: Epic I implementation authorized. User-managed browser login (D090) takes precedence
   over collecting credentials in QI Flow. Live weekly-sheet structure inspected without hour writes.

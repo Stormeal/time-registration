@@ -173,6 +173,7 @@ class DsbBrowser:
         row = self._entry_row(slot)
         self._select_allocation(row, slot.task.task_name)
         field = row.get_by_role("spinbutton").first
+        expect(field).to_be_editable()
         field.fill(slot.hours.replace(".", ","))
         field.press("Tab")
         for _ in range(HOUR_COMMIT_MILLISECONDS // HOUR_COMMIT_POLL_MILLISECONDS):
@@ -186,10 +187,6 @@ class DsbBrowser:
         combo = row.locator("input[role='combobox']").first
         combo.click()
         combo.fill(allocation_name)
-        combo.press("ArrowDown")
-        combo.press("Enter")
-        if combo.input_value() == allocation_name:
-            return
         candidates = [
             *self.page.get_by_role("option", name=allocation_name, exact=True).all(),
             *self.page.get_by_text(allocation_name, exact=True).all(),
@@ -199,6 +196,10 @@ class DsbBrowser:
                 candidate.click()
                 expect(combo).to_have_value(allocation_name)
                 return
+        combo.press("ArrowDown")
+        combo.press("Enter")
+        if combo.input_value() == allocation_name:
+            return
         raise ValueError("DSB did not expose the selected allocation. Rescan before retrying.")
 
     def commit_verified(self) -> None:

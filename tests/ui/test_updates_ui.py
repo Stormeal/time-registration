@@ -5,7 +5,8 @@ import re
 from datetime import UTC, datetime
 from io import BytesIO
 
-from PySide6.QtWidgets import QMessageBox, QPushButton
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 from pytestqt.qtbot import QtBot
 
 from qi_flow import __version__
@@ -16,7 +17,7 @@ from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient
-from qi_flow.ui.settings_page import SettingsPage
+from qi_flow.ui.settings_page import SettingsPage, UpdateDownloadWorker
 
 
 class FixedClock:
@@ -203,3 +204,51 @@ def test_update_download_progress_is_visible_and_reports_received_size(
     assert page._update_progress.isVisible()
     assert page._update_progress.value() == 50
     assert "50.0 MB of 100.0 MB" in page._update_status.text()
+
+
+def test_real_yes_click_starts_update_download(tmp_path, qtbot: QtBot, monkeypatch) -> None:
+    database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")
+    database.initialize()
+
+    def unit_of_work() -> SQLiteUnitOfWork:
+        return SQLiteUnitOfWork(database)
+
+    clock = FixedClock()
+    service = TimeTrackingApplicationService(unit_of_work, clock, FixedIds())
+    paths = AppPaths.for_root(tmp_path / "data")
+    paths.ensure()
+    page = SettingsPage(
+        service,
+        BackupManager(database, paths.backup_dir, unit_of_work, clock),
+        CsvTimesheetExporter(unit_of_work),
+        paths,
+        Startup(),
+        releases=ReleaseClient(lambda *_args, **_kwargs: Response(b"{}")),
+    )
+    version = newer_version()
+    update = AvailableUpdate(
+        version,
+        f"https://github.com/Stormeal/time-registration/releases/download/{version}/QI-Flow-Update.zip",
+        "a" * 64,
+        126_679_954,
+    )
+    monkeypatch.setattr(UpdateDownloadWorker, "start", lambda _worker: None)
+    qtbot.addWidget(page)
+    page.show()
+    next(
+        button
+        for button in page.findChildren(QPushButton)
+        if button.accessibleName() == "Open Updates and diagnostics"
+    ).click()
+
+    def accept_update() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        dialog.button(QMessageBox.StandardButton.Yes).click()
+
+    QTimer.singleShot(0, accept_update)
+    page._update_check_finished(update)
+
+    assert isinstance(page._update_worker, UpdateDownloadWorker)
+    assert page._update_progress.isVisible()
+    assert not page._check_updates.isEnabled()

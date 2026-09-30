@@ -954,7 +954,7 @@ class SettingsPage(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if answer is not QMessageBox.StandardButton.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             if self._update_progress is not None:
                 self._update_progress.setVisible(False)
             self._update_status.setText(f"Version {update.version} is available.")

@@ -34,11 +34,11 @@ def resolve_release_version(
 ) -> str:
     """Return the validated explicit version or the next available patch version."""
     project_tuple = _parse_version(project_version)
-    tagged_versions = [
-        _parse_version(tag[1:])
-        for tag in tags
-        if tag.startswith("v") and _VERSION_PATTERN.fullmatch(tag[1:]) is not None
-    ]
+    tagged_versions = []
+    for tag in tags:
+        numeric_tag = tag.removeprefix("v")
+        if _VERSION_PATTERN.fullmatch(numeric_tag) is not None:
+            tagged_versions.append(_parse_version(numeric_tag))
     latest_tuple = max([project_tuple, *tagged_versions])
 
     if requested is not None and requested != "":

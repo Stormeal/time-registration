@@ -38,7 +38,8 @@ The workflow has no push, tag, pull-request, or schedule trigger. Runs are seria
 
 Versions use the project's existing three-part numeric format: `MAJOR.MINOR.PATCH`, without a leading `v` in the input. The release tag is `v<version>`.
 
-- Read the current version from `pyproject.toml` and find the greatest existing tag matching `vMAJOR.MINOR.PATCH`.
+- Read the current version from `pyproject.toml` and find the greatest existing numeric tag matching
+  either the historical `MAJOR.MINOR.PATCH` form or the new `vMAJOR.MINOR.PATCH` form.
 - If `version` is supplied, validate its exact format and require it to be greater than both the current project version and the greatest matching existing version tag.
 - If it is blank, use the greater of the project version and the greatest matching tag as the base, then increment its patch component. When no matching tags exist, this naturally uses the project version as the base.
 - Reject an already-existing tag before starting the build.

@@ -1,0 +1,144 @@
+name: Manual Windows prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional MAJOR.MINOR.PATCH version (blank selects the next patch)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-prerelease-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build installer and updater
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+    steps:
+      - name: Require main branch
+        if: github.ref != 'refs/heads/main'
+        shell: pwsh
+        run: |
+          Write-Error "Run the prerelease workflow from the main branch."
+          exit 1
+
+      - name: Check out source and version tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Resolve and stamp release version
+        id: release-version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          $arguments = @("scripts/release_version.py", "resolve")
+          if ($env:REQUESTED_VERSION -ne "") {
+            $arguments += @("--requested", $env:REQUESTED_VERSION)
+          }
+          $releaseVersion = & python @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release version could not be resolved."
+          }
+          & python scripts/release_version.py stamp --version $releaseVersion
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release version could not be stamped into the build."
+          }
+          "version=$releaseVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Install project build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          & .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+          if ($LASTEXITCODE -ne 0) { throw "Project dependency installation failed." }
+          & .\.venv\Scripts\python.exe -m pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
+
+      - name: Run project quality gate
+        shell: pwsh
+        run: .\scripts\check.ps1
+
+      - name: Build installer and updater package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
+        run: .\scripts\build-installer.ps1 -Version $env:RELEASE_VERSION
+
+      - name: Verify and stage release assets
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
+        run: |
+          $installer = "dist/installer/QI-Flow-Setup-$env:RELEASE_VERSION.exe"
+          $updater = "dist/QI-Flow-Update.zip"
+          foreach ($asset in @($installer, $updater)) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+              throw "Required release asset is missing: $asset"
+            }
+            if ((Get-Item -LiteralPath $asset).Length -le 0) {
+              throw "Required release asset is empty: $asset"
+            }
+          }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item -LiteralPath $installer -Destination release-assets
+          Copy-Item -LiteralPath $updater -Destination release-assets
+
+      - name: Upload installer and updater assets
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: qi-flow-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer and updater assets
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: qi-flow-release-assets
+          path: release-assets
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_TARGET: ${{ github.sha }}
+        shell: bash
+        run: |
+          gh release create "v${RELEASE_VERSION}" \
+            --title "QI Flow v${RELEASE_VERSION}" \
+            --generate-notes \
+            --prerelease \
+            --target "${RELEASE_TARGET}" \
+            "release-assets/QI-Flow-Setup-${RELEASE_VERSION}.exe" \
+            "release-assets/QI-Flow-Update.zip"

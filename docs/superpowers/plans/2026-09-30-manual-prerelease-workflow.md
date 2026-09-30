@@ -101,7 +101,7 @@ Expected: all version utility tests pass. Also run `python -m ruff check scripts
 - Create: `.github/workflows/prerelease.yml`
 - Consumes: `scripts/release_version.py` CLI from Task 1
 
-- [ ] **Step 1: Implement the workflow trigger and build job**
+- [x] **Step 1: Implement the workflow trigger and build job**
 
 Declare `workflow_dispatch` with an optional string `version` input. Serialize runs with a fixed concurrency group and `cancel-in-progress: false`. The Windows build job must:
 
@@ -114,11 +114,11 @@ Declare `workflow_dispatch` with an optional string `version` input. Serialize r
 7. Fail if `dist/installer/QI-Flow-Setup-<version>.exe` or `dist/QI-Flow-Update.zip` is missing or empty.
 8. Copy only those two files into a clean `release-assets/` directory at its root, then upload that directory using the official artifact action pinned to a verified full commit SHA. Do not upload the full `dist/` tree.
 
-- [ ] **Step 2: Add the publish job with limited write permissions**
+- [x] **Step 2: Add the publish job with limited write permissions**
 
 Run a separate publish job only after the build succeeds. Give it `contents: write` and no other repository write permissions. Use the official artifact download action pinned to a verified full commit SHA and download to `release-assets/`. With `GITHUB_TOKEN` exposed as `GH_TOKEN`, use the runner's GitHub CLI to create `v<version>` on the dispatched commit, title it `QI Flow v<version>`, enable prerelease, generate release notes, and attach `release-assets/QI-Flow-Setup-<version>.exe` and `release-assets/QI-Flow-Update.zip`. Do not use shell interpolation of the workflow input; pass the validated job output through environment variables/arguments.
 
-- [ ] **Step 3: Validate workflow syntax, policy, and helper integration**
+- [x] **Step 3: Validate workflow syntax, policy, and helper integration**
 
 Run: `actionlint .github/workflows/prerelease.yml`  
 Expected: exit code 0. Confirm action references are full 40-character SHAs for verified official actions, the workflow permissions are explicit, there are no automatic triggers, and a failed build cannot reach publication.
@@ -126,7 +126,7 @@ Expected: exit code 0. Confirm action references are full 40-character SHAs for 
 Run: `python scripts/release_version.py resolve --requested ""`  
 Expected: print a valid next patch version without changing the checkout. In a temporary copy, run resolve/stamp with an explicit version and verify both declarations match and `git diff` contains only the two temporary version-file edits.
 
-- [ ] **Step 4: Commit the workflow**
+- [x] **Step 4: Commit the workflow**
 
 ### Task 3: Document release operations and complete verification
 

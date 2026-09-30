@@ -83,9 +83,11 @@ def test_decide_later_keeps_gap_pending_and_timer_actions_disabled(
     assert messages[0].default_button == "Decide later"
     assert page._start_work.isEnabled() is False
     assert page._finish_work.isEnabled() is False
+    assert "sleep" in page._finish_work.toolTip().lower()
     assert service.pending_sleep_gap() is not None
 
     service.resolve_sleep_gap("include")
     page.refresh()
     assert page._finish_work.isEnabled()
+    assert page._finish_work.toolTip() == ""
     page._refresh_timer.stop()

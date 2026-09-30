@@ -17,6 +17,7 @@ from qi_flow.application.dto import (
     StartWorkCommand,
     UpdateActiveWorkStartCommand,
     UpdateDayDetailsCommand,
+    UpdateDeductionCommand,
     UpdateWorkSessionCommand,
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
@@ -391,6 +392,55 @@ def test_manual_entries_are_exact_and_reject_overlap_or_orphan_lunch(tmp_path: P
                 datetime(2026, 9, 15, 15, 30, tzinfo=UTC),
             )
         )
+
+
+def test_manual_lunch_can_be_added_while_work_session_is_active(tmp_path: Path) -> None:
+    at = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, at)
+    session = service.start_work(StartWorkCommand()).session_id
+    clock.value += timedelta(hours=2)
+
+    deduction = service.add_manual_deduction(
+        ManualDeductionCommand(
+            session,
+            DeductionKind.LUNCH,
+            datetime(2026, 9, 15, 19, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 19, 30, tzinfo=UTC),
+        )
+    )
+
+    assert deduction.actual_started_at == datetime(2026, 9, 15, 19, 0, tzinfo=UTC)
+    assert [entry.id for entry in service.completed_deductions(session)] == [deduction.id]
+    assert service.active_state().session_id == session
+    assert service.active_state().net_seconds == 90 * 60
+
+
+def test_manual_lunch_can_be_corrected_while_work_session_is_active(tmp_path: Path) -> None:
+    at = datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, at)
+    session = service.start_work(StartWorkCommand()).session_id
+    clock.value += timedelta(hours=2)
+    deduction = service.add_manual_deduction(
+        ManualDeductionCommand(
+            session,
+            DeductionKind.LUNCH,
+            datetime(2026, 9, 15, 19, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 19, 30, tzinfo=UTC),
+        )
+    )
+
+    updated = service.update_deduction(
+        UpdateDeductionCommand(
+            deduction.id,
+            datetime(2026, 9, 15, 19, 5, tzinfo=UTC),
+            datetime(2026, 9, 15, 19, 25, tzinfo=UTC),
+        )
+    )
+
+    assert updated.actual_started_at == datetime(2026, 9, 15, 19, 5, tzinfo=UTC)
+    assert updated.actual_ended_at == datetime(2026, 9, 15, 19, 25, tzinfo=UTC)
+    assert service.active_state().session_id == session
+    assert service.active_state().net_seconds == 100 * 60
 
 
 def test_day_context_persists_multiline_unicode(tmp_path: Path) -> None:

@@ -14,7 +14,13 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
 )
 
-from qi_flow.application.dto import FinishWorkCommand, StartWorkCommand
+from qi_flow.application.dto import (
+    FinishDeductionCommand,
+    FinishWorkCommand,
+    StartDeductionCommand,
+    StartWorkCommand,
+)
+from qi_flow.domain.models import DeductionKind
 from qi_flow.ui.daily_note_dialog import DailyNoteDialog
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.session_editor_dialog import SessionEditorDialog
@@ -25,7 +31,7 @@ from qi_flow.ui.today_page import TodayPage
 def test_launch_uses_tall_compact_size(qtbot, rig):
     window = MainWindow(*rig.window_args)
     qtbot.addWidget(window)
-    assert window.size().width() == 640
+    assert window.size().width() == 760
     assert window.size().height() == 860
 
 
@@ -38,6 +44,52 @@ def test_session_editor_keeps_table_readable_and_selects_session(qtbot, rig):
     assert dialog._tree.height() >= 180
     assert dialog._tree.currentItem() is not None
     assert dialog._save.isEnabled()
+
+
+def test_disabled_session_editor_actions_explain_required_selection(qtbot, rig):
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
+    qtbot.addWidget(dialog)
+
+    assert not dialog._save.isEnabled()
+    assert "select" in dialog._save.toolTip().lower()
+    assert not dialog._delete.isEnabled()
+    assert "select" in dialog._delete.toolTip().lower()
+    assert not dialog._add_lunch.isEnabled()
+    assert "select a work session" in dialog._add_lunch.toolTip().lower()
+
+
+def test_active_session_editor_allows_adding_lunch(qtbot, rig, monkeypatch):
+    session = rig.service.start_work(StartWorkCommand(rig.clock.value - timedelta(hours=3)))
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
+    qtbot.addWidget(dialog)
+    selected_ids = []
+
+    def inspect_manual_entry(entry):
+        selected_ids.append(entry._parent.currentData())
+        return 0
+
+    monkeypatch.setattr(
+        "qi_flow.ui.session_editor_dialog.ManualEntryDialog.exec", inspect_manual_entry
+    )
+    dialog._add_lunch.click()
+
+    assert dialog._add_lunch.isEnabled()
+    assert selected_ids == [str(session.session_id)]
+    assert rig.service.active_state().session_id == session.session_id
+
+
+def test_completed_timer_lunch_is_listed_under_active_session(qtbot, rig):
+    rig.service.start_work(StartWorkCommand(rig.clock.value - timedelta(hours=3)))
+    rig.service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    rig.clock.value += timedelta(minutes=30)
+    rig.service.finish_deduction(FinishDeductionCommand())
+
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
+    qtbot.addWidget(dialog)
+
+    running = dialog._tree.topLevelItem(0)
+    assert running is not None and running.childCount() == 1
+    assert running.child(0).text(0) == "Lunch"
 
 
 def test_month_is_between_previous_and_next_at_compact_width(qtbot, rig):

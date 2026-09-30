@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 
 from qi_flow.application.dto import ManualWorkSessionCommand
 from qi_flow.domain.models import IsoWeek
@@ -43,6 +43,42 @@ def test_week_target_override_does_not_change_default(qtbot, rig):
     page._target_hours.setValue(32)
     assert rig.service.weekly_progress(IsoWeek(2026, 40)).target_minutes == 1920
     assert rig.service.app_preferences().weekly_target_minutes == 2220
+
+
+def test_disabled_timesheet_actions_explain_required_selection(qtbot, rig):
+    page = make_page(qtbot, rig)
+
+    assert not page._edit_sessions.isEnabled()
+    assert "select a day" in page._edit_sessions.toolTip().lower()
+    assert not page._target_hours.isEnabled()
+    assert "select a day" in page._target_hours.toolTip().lower()
+
+    page._tree.setCurrentItem(day_item(page, 28))
+
+    assert page._edit_sessions.isEnabled()
+    assert page._edit_sessions.toolTip() == ""
+    assert page._target_hours.isEnabled()
+    assert page._target_hours.toolTip() == ""
+
+
+def test_weekly_target_up_and_down_buttons_update_selected_iso_week(qtbot, rig):
+    page = make_page(qtbot, rig)
+    page._tree.setCurrentItem(day_item(page, 28))
+    starting_target = page._target_hours.value()
+    increment_button = QPoint(page._target_hours.width() - 5, 4)
+    decrement_button = QPoint(page._target_hours.width() - 5, page._target_hours.height() - 4)
+
+    qtbot.mouseClick(page._target_hours, Qt.MouseButton.LeftButton, pos=increment_button)
+
+    assert page._target_hours.value() == starting_target + 1
+    assert (
+        rig.service.weekly_progress(IsoWeek(2026, 40)).target_minutes == (starting_target + 1) * 60
+    )
+
+    qtbot.mouseClick(page._target_hours, Qt.MouseButton.LeftButton, pos=decrement_button)
+
+    assert page._target_hours.value() == starting_target
+    assert rig.service.weekly_progress(IsoWeek(2026, 40)).target_minutes == starting_target * 60
 
 
 def test_edit_return_refreshes_totals_and_preserves_selected_week(qtbot, rig):

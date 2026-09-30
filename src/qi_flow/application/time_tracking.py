@@ -197,10 +197,12 @@ class TimeTrackingApplicationService:
         now = self._when(None)
         with self._uow_factory() as uow:
             session = uow.sessions.get(command.session_id)
-            if session is None or session.deleted_at is not None or session.actual_ended_at is None:
+            if session is None or session.deleted_at is not None:
                 raise InvalidStateTransitionError(
-                    "A manual lunch or break needs a completed work session."
+                    "A manual lunch or break needs an available work session."
                 )
+            if session.actual_ended_at is None and not session.is_active:
+                raise InvalidStateTransitionError("The work session is unavailable.")
             self._ensure_deduction_fits(uow, session, start, end)
             deduction = Deduction(
                 id=self._identifiers.deduction_id(),
@@ -226,7 +228,9 @@ class TimeTrackingApplicationService:
             if deduction is None or deduction.deleted_at is not None or deduction.is_active:
                 raise InvalidStateTransitionError("Choose a completed lunch or break to edit.")
             session = uow.sessions.get(deduction.session_id)
-            if session is None or session.actual_ended_at is None:
+            if session is None or session.deleted_at is not None:
+                raise InvalidStateTransitionError("The parent work session is unavailable.")
+            if session.actual_ended_at is None and not session.is_active:
                 raise InvalidStateTransitionError("The parent work session is unavailable.")
             self._ensure_deduction_fits(uow, session, start, end, deduction.id)
             self._record_deduction_audit(uow, deduction, "update", now)
@@ -1160,16 +1164,17 @@ class TimeTrackingApplicationService:
         end: datetime,
         excluded_id: DeductionId | None = None,
     ) -> None:
-        if (
-            session.actual_ended_at is None
-            or start < session.actual_started_at
-            or end > session.actual_ended_at
-        ):
+        session_end = session.actual_ended_at or end
+        if start < session.actual_started_at or end > session_end:
             raise InvalidIntervalError("Lunches and breaks must stay inside their work session.")
         for deduction in uow.deductions.list_for_session(session.id):
             if deduction.id == excluded_id or deduction.deleted_at is not None:
                 continue
             deduction_end = deduction.actual_ended_at
+            if deduction_end is None:
+                if end > deduction.actual_started_at:
+                    raise OverlappingIntervalError("Lunches and breaks cannot overlap.")
+                continue
             if (
                 deduction_end is not None
                 and start < deduction_end

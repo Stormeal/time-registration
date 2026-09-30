@@ -35,9 +35,8 @@ class HistoryDialog(QDialog):
         self._tree.setHeaderLabels(("Entry", "Action", "Previous interval", "Changed"))
         self._restore = QPushButton("Restore selected version")
         self._restore.setEnabled(False)
-        self._tree.itemSelectionChanged.connect(
-            lambda: self._restore.setEnabled(bool(self._tree.selectedItems()))
-        )
+        self._restore.setToolTip("Select a saved entry version to restore.")
+        self._tree.itemSelectionChanged.connect(self._update_restore_button)
         self._restore.clicked.connect(self._restore_selected)
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
@@ -49,6 +48,11 @@ class HistoryDialog(QDialog):
         layout.addWidget(self._tree, 1)
         layout.addLayout(buttons)
         self._load(work_date)
+
+    def _update_restore_button(self) -> None:
+        enabled = bool(self._tree.selectedItems())
+        self._restore.setEnabled(enabled)
+        self._restore.setToolTip("" if enabled else "Select a saved entry version to restore.")
 
     def _load(self, work_date: date) -> None:
         for record in self._service.entry_history_for_day(work_date):

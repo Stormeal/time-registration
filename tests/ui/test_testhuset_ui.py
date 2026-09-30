@@ -3,8 +3,9 @@
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
-from PySide6.QtCore import QDate, Qt, QTime
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import QDate, QPoint, QPointF, Qt, QTime
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtWidgets import QMessageBox, QScrollArea
 
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
@@ -65,6 +66,39 @@ def test_override_save_is_independent_of_time_correction(qtbot, tmp_path) -> Non
     assert saved.testhuset_task_id == task.id
     assert saved.actual_started_at == session.actual_started_at
     assert saved.actual_ended_at == session.actual_ended_at
+
+
+def test_wheel_over_task_assignment_scrolls_editor_without_changing_assignment(
+    qtbot, tmp_path, qapp
+) -> None:
+    service, tracking, _session, _task = build(tmp_path)
+    dialog = SessionEditorDialog(tracking, date(2026, 9, 14), service)
+    qtbot.addWidget(dialog)
+    dialog.resize(840, 320)
+    dialog.show()
+    dialog._tree.setCurrentItem(dialog._tree.topLevelItem(0))
+    dialog._task.setCurrentIndex(0)
+    dialog._task.setFocus()
+    before = dialog._task.currentIndex()
+    scroll = dialog.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.verticalScrollBar().maximum() > 0
+    local = QPoint(dialog._task.width() // 2, dialog._task.height() // 2)
+    event = QWheelEvent(
+        QPointF(local),
+        QPointF(dialog._task.mapToGlobal(local)),
+        QPoint(),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+
+    qapp.sendEvent(dialog._task, event)
+
+    assert dialog._task.currentIndex() == before
+    assert scroll.verticalScrollBar().value() > 0
 
 
 def test_selected_completed_session_offers_a_preselected_lunch_dialog(
@@ -226,6 +260,16 @@ def test_deleted_entry_is_recoverable_from_history_dialog(qtbot, tmp_path, monke
     assert tracking.completed_sessions_for_day(date(2026, 9, 14))[0].id == session.id
 
 
+def test_disabled_history_restore_explains_required_selection(qtbot, tmp_path) -> None:
+    _, tracking, session, _ = build(tmp_path)
+    tracking.delete_work_session(session.id)
+    dialog = HistoryDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+
+    assert not dialog._restore.isEnabled()
+    assert "select" in dialog._restore.toolTip().lower()
+
+
 def test_delete_requires_confirmation(qtbot, tmp_path, monkeypatch) -> None:
     _, tracking, _session, _ = build(tmp_path)
     dialog = SessionEditorDialog(tracking, date(2026, 9, 14))
@@ -300,9 +344,11 @@ def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:
 
     dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
     qtbot.addWidget(dialog)
+    assert dialog._fill.toolTip() == "The weekly review is loading."
     qtbot.waitUntil(lambda: bool(dialog._choices))
     assert writes == []
     assert dialog._fill.isEnabled()
+    assert dialog._fill.toolTip() == ""
     assert dialog._choices[0].currentData() is True
     assert writes == []
     qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)

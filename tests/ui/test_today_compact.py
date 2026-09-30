@@ -40,6 +40,29 @@ def test_compact_today_work_lunch_finish_and_undo_flow(qtbot, rig):
     assert page._day_total.text() == "02:30"
 
 
+def test_today_actions_use_horizontal_row_when_wide_and_stack_when_narrow(qtbot, rig, qapp):
+    page = make_page(qtbot, rig)
+    page._start_work.click()
+    page.refresh()
+    buttons = (page._lunch, page._finish_work, page._start_at)
+
+    page.resize(760, 520)
+    qapp.processEvents()
+    assert page.width() == 760
+    assert len({button.geometry().center().y() for button in buttons}) == 1
+    assert [button.geometry().x() for button in buttons] == sorted(
+        button.geometry().x() for button in buttons
+    )
+
+    page.resize(600, 520)
+    qapp.processEvents()
+    assert page.width() < 720
+    assert len({button.geometry().center().x() for button in buttons}) == 1
+    assert [button.geometry().y() for button in buttons] == sorted(
+        button.geometry().y() for button in buttons
+    )
+
+
 def test_today_total_survives_finish_and_second_session(qtbot, rig):
     page = make_page(qtbot, rig)
     assert hasattr(page, "_day_total")

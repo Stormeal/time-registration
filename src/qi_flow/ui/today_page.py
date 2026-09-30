@@ -6,8 +6,9 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QShowEvent
+from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -123,12 +124,14 @@ class TodayPage(QWidget):
         for widget in (self._status, self._timer, self._session_detail, self._lunch_duration):
             timer_info.addWidget(widget)
         timer_row.addLayout(timer_info, 1)
-        buttons = QVBoxLayout()
+        buttons = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        buttons.setSpacing(8)
+        self._action_buttons_layout = buttons
         for action_button in (self._start_work, self._lunch, self._finish_work, self._start_at):
             buttons.addWidget(action_button)
         buttons.addStretch(1)
-        timer_row.addLayout(buttons)
         layout.addLayout(timer_row)
+        layout.addLayout(buttons)
         layout.addWidget(self._resolve)
         summary = QHBoxLayout()
         for labels in (
@@ -216,6 +219,13 @@ class TodayPage(QWidget):
         recovery = self._service.recovery_state()
         gap = self._service.pending_sleep_gap()
         blocked = recovery is not None or gap is not None
+        blocked_help = (
+            "Resolve the unfinished previous-day session before using timer actions."
+            if recovery is not None
+            else "Resolve the detected sleep gap before using timer actions."
+            if gap is not None
+            else ""
+        )
         running = state.session_id is not None
         on_lunch = state.active_deduction_kind is not None
         self._timer.setText(format_duration(state.net_seconds))
@@ -228,6 +238,9 @@ class TodayPage(QWidget):
         self._finish_work.setEnabled(running and not on_lunch and not blocked)
         self._start_at.setText("Change start…" if running else "Start at…")
         self._start_at.setEnabled(not blocked)
+        self._start_work.setToolTip(blocked_help if not running and blocked else "")
+        self._lunch.setToolTip(blocked_help if running and blocked else "")
+        self._start_at.setToolTip(blocked_help)
         self._primary(self._start_work, True)
         self._primary(self._lunch, True)
         self._status.setText("On lunch" if on_lunch else "Working" if running else "Not tracking")
@@ -244,7 +257,13 @@ class TodayPage(QWidget):
             self._lunch_duration.setText(
                 f"Lunch · {format_duration(elapsed)} · End lunch before finishing work."
             )
-        self._finish_work.setToolTip("End lunch before finishing work." if on_lunch else "")
+        self._finish_work.setToolTip(
+            blocked_help
+            if running and blocked
+            else "End lunch before finishing work."
+            if on_lunch
+            else ""
+        )
         self._resolve.setVisible(blocked)
         self._resolve.setText("Resolve previous-day work" if recovery else "Resolve detected sleep")
         self._undo.setVisible(self._service.can_undo_timer_action())
@@ -279,6 +298,16 @@ class TodayPage(QWidget):
         if not dirty:
             self._load_day_context()
         self.refresh()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        direction = (
+            QBoxLayout.Direction.LeftToRight
+            if event.size().width() >= 720
+            else QBoxLayout.Direction.TopToBottom
+        )
+        if self._action_buttons_layout.direction() != direction:
+            self._action_buttons_layout.setDirection(direction)
 
     def _start(self) -> None:
         self._run(

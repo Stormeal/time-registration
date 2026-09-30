@@ -54,6 +54,7 @@ class TrayController(QObject):
         self._tray.setToolTip("QI Flow")
 
         self._menu = QMenu()
+        self._menu.setToolTipsVisible(True)
         open_action = QAction("Open QI Flow", self._menu)
         open_action.triggered.connect(self.open_requested.emit)
         self._menu.addAction(open_action)
@@ -138,9 +139,15 @@ class TrayController(QObject):
 
     def _refresh_menu(self) -> None:
         state = self._service.active_state()
-        blocked = (
-            self._service.recovery_state() is not None
-            or self._service.pending_sleep_gap() is not None
+        recovery = self._service.recovery_state()
+        gap = self._service.pending_sleep_gap()
+        blocked = recovery is not None or gap is not None
+        blocked_help = (
+            "Resolve the unfinished previous-day session before using timer actions."
+            if recovery is not None
+            else "Resolve the detected sleep gap before using timer actions."
+            if gap is not None
+            else ""
         )
         if state.session_id is None:
             self._state_action.setText("Not tracking")
@@ -148,18 +155,31 @@ class TrayController(QObject):
             self._lunch_action.setEnabled(False)
             self._lunch_action.setText("Start lunch")
             self._finish_action.setEnabled(False)
+            self._start_work_action.setToolTip(blocked_help)
+            self._lunch_action.setToolTip("Start work before starting lunch.")
+            self._finish_action.setToolTip("Start work before finishing a session.")
         elif state.active_deduction_kind is not None:
             self._state_action.setText(f"Lunch running - {format_duration(state.net_seconds)}")
             self._start_work_action.setEnabled(False)
             self._lunch_action.setEnabled(not blocked)
             self._lunch_action.setText("End lunch")
             self._finish_action.setEnabled(False)
+            self._start_work_action.setToolTip(
+                "Finish the current work session before starting another."
+            )
+            self._lunch_action.setToolTip(blocked_help)
+            self._finish_action.setToolTip(blocked_help or "End lunch before finishing work.")
         else:
             self._state_action.setText(f"Working - {format_duration(state.net_seconds)}")
             self._start_work_action.setEnabled(False)
             self._lunch_action.setEnabled(not blocked)
             self._lunch_action.setText("Start lunch")
             self._finish_action.setEnabled(not blocked)
+            self._start_work_action.setToolTip(
+                "Finish the current work session before starting another."
+            )
+            self._lunch_action.setToolTip(blocked_help)
+            self._finish_action.setToolTip(blocked_help)
 
         self._startup_action.blockSignals(True)
         self._startup_action.setChecked(self._startup_manager.is_enabled())

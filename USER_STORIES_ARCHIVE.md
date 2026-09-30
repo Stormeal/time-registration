@@ -584,10 +584,115 @@ Acceptance criteria:
 - Untouched sessions with nonzero timestamp seconds close without false discard prompts; changed
   visible values still trigger the existing unsaved-correction safeguard.
 
-Verification: scripts/check.ps1 passes203 tests, Ruff formatting/lint and strict mypy56 source
-files. Owning-layer and Qt interaction regressions cover these criteria; both independent review
-findings were reproduced RED, fixed GREEN and included in the full suite. Real offscreen Qt light/
-dark previews at640x860,640x520 and100/125/150/200% were inspected with Windows fonts. Manual
-monitor/keyboard, production data, installer and authenticated live integration checks remain
-release work. Existing cross-midnight time-only correction and switching rows with unsaved interval
-edits remain pre-existing editor limitations outside this follow-up.
+## Epic M — User-reported usability and defects
+
+These reports were provided by a QI Flow user on 2026-09-30 and translated from Danish.
+
+### US35 — Add and review lunch during an active session · P1
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a user who forgot to record lunch when it started, I want to add or complete a lunch interval
+while my work session is still active so that I can correct the record without ending and
+restarting the work session.
+
+Acceptance criteria:
+
+- **Add lunch** is available from the active session editor and accepts a lunch interval that
+  already occurred, subject to the existing session-boundary and overlap validation.
+- Saving a lunch correction persists it without ending or restarting the active work session.
+- A lunch interval started and ended with the timer appears in the active session editor as soon
+  as it is complete; the user does not have to finish the work session first to see it.
+- The corrected lunch interval is included in the session's net-work calculation.
+
+### US36 — Keep task assignment scrolling independent · P1
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a user editing a session, I want scrolling the dialog to leave the task assignment selection
+unchanged so that I do not accidentally assign my work to a different task.
+
+Acceptance criteria:
+
+- Scrolling the session editor outside the task-assignment control does not move the task tree's
+  selection or scroll position.
+- The task-assignment tree scrolls when the user scrolls over or focuses that control.
+- Scrolling the dialog alone never changes the assigned task; a task changes only through an
+  explicit selection and save.
+
+### US37 — Explain why disabled actions are unavailable · P2
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a user, I want a short explanation when an action is disabled so that I know what condition I
+need to resolve before I can use it.
+
+Acceptance criteria:
+
+- Disabled buttons with a user-resolvable availability condition provide a concise English tooltip
+  explaining why the action is unavailable.
+- The tooltip reflects the current state and updates when the action becomes available or its
+  blocking condition changes.
+- Actions that are merely decorative or have no actionable explanation are not given misleading
+  tooltips.
+- Main-window Today and Timesheet actions, session correction, recoverable-history restoration,
+  Testhuset fill review, and tray timer controls explain their relevant disabled states.
+
+### US38 — Make the weekly-target increment control work · P2
+
+Implementation status: **Complete** · verified on `origin/main` 2026-09-30; the reported defect
+could not be reproduced.
+
+As a user adjusting a weekly target in Timesheet, I want the increase control to raise the target
+so that I can adjust it without opening another editor.
+
+Acceptance criteria:
+
+- Pressing the weekly-target up control increases the displayed target by one configured step and
+  saves the new target for the selected ISO week.
+- Pressing the down control decreases it by the same step, within the allowed range.
+- The displayed value remains consistent with the saved value after changing the selected week or
+  refreshing Timesheet.
+
+## Epic N — User-reported interface improvements
+
+### US39 — Give the main window more room on startup · P2
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a user, I want QI Flow to open in a wider window so that more of the Timesheet content is
+visible without expanding sections manually.
+
+Acceptance criteria:
+
+- The initial main-window width gives the Timesheet content more room than the current startup
+  layout while keeping the window usable on supported display sizes.
+- Timesheet information that is currently hidden behind expandable sections is easier to discover
+  or review without requiring the user to expand every section individually.
+- Resizing and window-state behavior remain usable on smaller displays.
+
+### US40 — Arrange Today actions horizontally · P2
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a user, I want the primary Today actions arranged horizontally when space allows so that the
+timer controls are easier to scan and use.
+
+Acceptance criteria:
+
+- Today’s primary timer actions are presented in a horizontal row at supported window sizes where
+  the controls fit comfortably.
+- The actions remain readable and operable at narrower window sizes, using a responsive layout
+  when a horizontal row does not fit.
+
+Verification: 215 automated tests pass; Ruff formatting and lint, strict mypy, and the 760-pixel
+startup-width and responsive Today layout interactions pass. The weekly-target interaction test
+clicks the upper and lower spin-box controls and verifies persistence to the selected ISO week.
+Owning-layer and Qt interaction regressions cover these criteria; both independent review findings
+were reproduced RED, fixed GREEN and included in the full suite. Real offscreen Qt light/dark
+previews at 640x860, 640x520 and 100/125/150/200% were inspected with Windows fonts. The project
+check script could not run because global Python has no Ruff module; the same Ruff, mypy, and pytest
+checks passed using the existing project virtual environment. Manual monitor/keyboard, production
+data, installer and authenticated live integration checks remain release work. Existing
+cross-midnight time-only correction and switching rows with unsaved interval edits remain
+pre-existing editor limitations outside this follow-up.

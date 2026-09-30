@@ -93,11 +93,13 @@ class TimesheetPage(QWidget):
         self._target_hours.setRange(0, 100)
         self._target_hours.setSuffix(" hours weekly target")
         self._target_hours.setEnabled(False)
+        self._target_hours.setToolTip("Select a day to load its weekly target.")
         self._target_hours.valueChanged.connect(self._save_target)
         self._add_entry = QPushButton("Add or correct entry")
         self._add_entry.clicked.connect(self._open_entry_dialog)
         self._edit_sessions = QPushButton("Edit sessions")
         self._edit_sessions.setEnabled(False)
+        self._edit_sessions.setToolTip("Select a day to edit its work sessions.")
         self._edit_sessions.clicked.connect(self._open_session_editor)
 
         navigation = QHBoxLayout()
@@ -118,6 +120,7 @@ class TimesheetPage(QWidget):
         layout.addLayout(edit_actions)
         self._testhuset_button = QPushButton("Review & insert EazyProject hours")
         self._testhuset_button.setEnabled(False)
+        self._testhuset_button.setToolTip("Select a day to review its ISO week.")
         self._testhuset_button.clicked.connect(self._open_testhuset)
         if testhuset is not None and sheet_factory is not None:
             layout.addWidget(self._testhuset_button)
@@ -204,16 +207,19 @@ class TimesheetPage(QWidget):
         if isinstance(summary, DaySummaryView):
             self._selected_date = datetime.combine(summary.work_date, datetime.min.time())
             self._edit_sessions.setEnabled(True)
+            self._edit_sessions.setToolTip("")
             iso_year, iso_number, _ = summary.work_date.isocalendar()
             self._show_week(IsoWeek(iso_year, iso_number))
         elif isinstance(summary, IsoWeek):
             self._selected_date = None
             self._edit_sessions.setEnabled(False)
+            self._edit_sessions.setToolTip("Select a day to edit its work sessions.")
             self._show_week(summary)
 
     def _show_week(self, iso_week: IsoWeek) -> None:
         self._selected_week = iso_week
         self._testhuset_button.setEnabled(True)
+        self._testhuset_button.setToolTip("")
         self._testhuset_button.setText("Review & insert EazyProject hours")
         if self._dsb is not None:
             self._dsb_button.setText("Review & insert DSB hours")
@@ -231,6 +237,7 @@ class TimesheetPage(QWidget):
         self._target_hours.setValue(progress.target_minutes // 60)
         self._target_hours.blockSignals(False)
         self._target_hours.setEnabled(True)
+        self._target_hours.setToolTip("")
 
     def _save_target(self, hours: int) -> None:
         if self._selected_week is not None:
@@ -278,6 +285,11 @@ class TimesheetPage(QWidget):
         enabled = self._dsb is not None and self._dsb.is_enabled()
         self._dsb_button.setVisible(enabled)
         self._dsb_button.setEnabled(enabled and self._selected_week is not None)
+        self._dsb_button.setToolTip(
+            "Select a day to review its ISO week."
+            if enabled and self._selected_week is None
+            else ""
+        )
 
     def _change_month(self, offset: int) -> None:
         target = self._year * 12 + self._month - 1 + offset
@@ -286,10 +298,13 @@ class TimesheetPage(QWidget):
         self._selected_week = None
         self._selected_date = None
         self._testhuset_button.setEnabled(False)
+        self._testhuset_button.setToolTip("Select a day to review its ISO week.")
         self._dsb_button.setEnabled(False)
         self._edit_sessions.setEnabled(False)
+        self._edit_sessions.setToolTip("Select a day to edit its work sessions.")
         self._week_summary.setText("Select a day to review its ISO week.")
         self._target_hours.setEnabled(False)
+        self._target_hours.setToolTip("Select a day to load its weekly target.")
         self.refresh()
 
     @staticmethod

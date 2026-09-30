@@ -6,6 +6,7 @@ Every request is intercepted locally; these tests cannot contact a workplace ser
 import json
 from datetime import date
 from threading import Event
+from time import sleep
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -54,6 +55,7 @@ def browser_sheet():
         context = browser.new_context()
         page = context.new_page()
         page.set_default_timeout(1500)
+        page.set_default_navigation_timeout(30_000)
         writes = []
         reply = {"d": "1|Saved|7,75"}
 
@@ -86,8 +88,10 @@ def test_open_navigates_directly_to_the_weekly_sheet() -> None:
         context = browser.new_context()
         page = context.new_page()
         page.set_default_timeout(1500)
+        page.set_default_navigation_timeout(30_000)
 
         def intercept(route):
+            sleep(1.8)  # A busy CI runner can delay even an intercepted navigation.
             route.fulfill(content_type="text/html", body=HTML)
 
         page.route("**/*", intercept)

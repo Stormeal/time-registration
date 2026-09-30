@@ -104,6 +104,7 @@ class TesthusetDialog(QDialog):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._fill = QPushButton(f"Fill {service.destination} timesheet")
         self._fill.setEnabled(False)
+        self._fill.setToolTip("The weekly review is loading.")
         self._fill.clicked.connect(self._confirm)
         self._cancel = QPushButton("Cancel")
         self._cancel.clicked.connect(self.reject)
@@ -151,14 +152,17 @@ class TesthusetDialog(QDialog):
         self._validate_choices()
 
     def _validate_choices(self) -> None:
-        self._fill.setEnabled(
-            all(choice.currentData() is not None for choice in self._choices.values())
+        can_fill = all(choice.currentData() is not None for choice in self._choices.values())
+        self._fill.setEnabled(can_fill)
+        self._fill.setToolTip(
+            "" if can_fill else "Choose whether to keep or replace each differing existing value."
         )
 
     def _confirm(self) -> None:
         if not self._fill.isEnabled():
             return
         self._fill.setEnabled(False)
+        self._fill.setToolTip("The confirmed timesheet fill is running.")
         self._table.setEnabled(False)
         self._worker.replace = frozenset(
             row for row, choice in self._choices.items() if choice.currentData() is True
@@ -169,6 +173,7 @@ class TesthusetDialog(QDialog):
     def _outcome(self, message: str) -> None:
         self._status.setText(message)
         self._fill.setEnabled(False)
+        self._fill.setToolTip(message)
 
     def _finished(self) -> None:
         self._cancel.setText("Close")

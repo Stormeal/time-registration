@@ -74,6 +74,9 @@ def test_menu_offers_start_work_when_stopped(tmp_path: object, qtbot: QtBot) -> 
     assert tray._lunch_action.isEnabled() is False
     assert tray._finish_action.isEnabled() is False
     assert tray._state_action.text() == "Not tracking"
+    assert tray._menu.toolTipsVisible() is True
+    assert "start work" in tray._lunch_action.toolTip().lower()
+    assert "start work" in tray._finish_action.toolTip().lower()
 
 
 def test_menu_reflects_working_state(tmp_path: object, qtbot: QtBot) -> None:
@@ -89,6 +92,7 @@ def test_menu_reflects_working_state(tmp_path: object, qtbot: QtBot) -> None:
     assert tray._lunch_action.isEnabled() is True
     assert tray._lunch_action.text() == "Start lunch"
     assert tray._finish_action.isEnabled() is True
+    assert "current work session" in tray._start_work_action.toolTip().lower()
 
 
 def test_menu_reflects_lunch_state_and_blocks_finish(tmp_path: object, qtbot: QtBot) -> None:
@@ -105,6 +109,7 @@ def test_menu_reflects_lunch_state_and_blocks_finish(tmp_path: object, qtbot: Qt
     assert tray._lunch_action.isEnabled() is True
     assert tray._lunch_action.text() == "End lunch"
     assert tray._finish_action.isEnabled() is False
+    assert "end lunch" in tray._finish_action.toolTip().lower()
 
 
 def test_start_with_windows_toggle_writes_through_to_the_startup_manager(
@@ -150,11 +155,14 @@ def test_panel_mirrors_the_same_service_state(tmp_path: object, qtbot: QtBot) ->
 
     panel.refresh()
     assert panel._status.text() == "Not tracking"
+    assert "start work" in panel._lunch.toolTip().lower()
+    assert "start work" in panel._finish_work.toolTip().lower()
 
     service.start_work(StartWorkCommand())
     panel.refresh()
     assert panel._status.text() == "Working"
     assert panel._finish_work.isEnabled() is True
+    assert "current work session" in panel._start_work.toolTip().lower()
 
 
 def test_panel_start_button_uses_the_service(tmp_path: object, qtbot: QtBot) -> None:

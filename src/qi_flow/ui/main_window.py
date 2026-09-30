@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
-        self.resize(640, 860)
+        self.resize(760, 860)
         app = QApplication.instance()
         assert isinstance(app, QApplication)
         self._theme_manager = ThemeManager(app)

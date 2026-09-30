@@ -119,9 +119,15 @@ class TrayPanel(QWidget):
 
     def refresh(self) -> None:
         state = self._service.active_state()
-        blocked = (
-            self._service.recovery_state() is not None
-            or self._service.pending_sleep_gap() is not None
+        recovery = self._service.recovery_state()
+        gap = self._service.pending_sleep_gap()
+        blocked = recovery is not None or gap is not None
+        blocked_help = (
+            "Resolve the unfinished previous-day session before using timer actions."
+            if recovery is not None
+            else "Resolve the detected sleep gap before using timer actions."
+            if gap is not None
+            else ""
         )
         self._timer.setText(format_duration(state.net_seconds))
         if state.session_id is None:
@@ -133,6 +139,9 @@ class TrayPanel(QWidget):
             self._lunch.setEnabled(False)
             self._lunch.setText("Start lunch")
             self._finish_work.setEnabled(False)
+            self._start_work.setToolTip(blocked_help)
+            self._lunch.setToolTip("Start work before starting lunch.")
+            self._finish_work.setToolTip("Start work before finishing a session.")
         elif state.active_deduction_kind is not None:
             self._status.setText("Lunch running")
             self._detail.setText(self._session_detail(state))
@@ -140,6 +149,9 @@ class TrayPanel(QWidget):
             self._lunch.setEnabled(not blocked)
             self._lunch.setText("End lunch")
             self._finish_work.setEnabled(False)
+            self._start_work.setToolTip("Finish the current work session before starting another.")
+            self._lunch.setToolTip(blocked_help)
+            self._finish_work.setToolTip(blocked_help or "End lunch before finishing work.")
         else:
             self._status.setText("Working")
             self._detail.setText(self._session_detail(state))
@@ -147,6 +159,9 @@ class TrayPanel(QWidget):
             self._lunch.setEnabled(not blocked)
             self._lunch.setText("Start lunch")
             self._finish_work.setEnabled(not blocked)
+            self._start_work.setToolTip("Finish the current work session before starting another.")
+            self._lunch.setToolTip(blocked_help)
+            self._finish_work.setToolTip(blocked_help)
 
     def _session_detail(self, state: ActiveStateView) -> str:
         if state.actual_started_at is None:

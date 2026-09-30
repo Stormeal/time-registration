@@ -67,7 +67,7 @@ class ManualEntryDialog(QDialog):
         self._kind.currentIndexChanged.connect(self._update_parent_visibility)
         self._buttons.accepted.connect(self._save)
         self._buttons.rejected.connect(self.reject)
-        self._load_sessions()
+        self._load_sessions(initial)
         if deduction_kind is not None:
             self._kind.setCurrentIndex(self._kind.findData(deduction_kind.value))
             self._kind.setEnabled(False)
@@ -79,7 +79,7 @@ class ManualEntryDialog(QDialog):
         self._update_parent_visibility()
         self._initial_values = self._form_values()
 
-    def _load_sessions(self) -> None:
+    def _load_sessions(self, work_date: date) -> None:
         for session in self._service.completed_sessions():
             if session.actual_ended_at is None:
                 continue
@@ -89,6 +89,13 @@ class ManualEntryDialog(QDialog):
                 f" - {session.actual_ended_at.astimezone(COPENHAGEN):%H:%M}"
             )
             self._parent.addItem(label, str(session.id))
+        active = self._service.active_session_for_day(work_date)
+        if active is not None:
+            label = (
+                f"Active work session: {active.actual_started_at.astimezone(COPENHAGEN):%d/%m/%Y} "
+                f"{active.actual_started_at.astimezone(COPENHAGEN):%H:%M} - running"
+            )
+            self._parent.addItem(label, str(active.id))
 
     def _update_parent_visibility(self) -> None:
         self._work_session.setCurrentWidget(

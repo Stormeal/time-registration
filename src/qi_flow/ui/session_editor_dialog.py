@@ -38,6 +38,7 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import Deduction, DeductionKind, WorkLocation, WorkSession
 from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.ui.controls import SettingsWheelGuard
 from qi_flow.ui.daily_note_dialog import DailyNoteDialog
 from qi_flow.ui.history_dialog import HistoryDialog
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
@@ -110,6 +111,8 @@ class SessionEditorDialog(QDialog):
         context_form.addWidget(self._edit_note)
         context_form.addWidget(self._save_office)
         self._task = QComboBox()
+        self._task_wheel_guard = SettingsWheelGuard(self)
+        self._task.installEventFilter(self._task_wheel_guard)
         self._task.addItem("Use configured default", None)
         if testhuset is not None:
             try:
@@ -161,6 +164,7 @@ class SessionEditorDialog(QDialog):
         layout.addWidget(buttons)
         self._load_office_status()
         self._refresh()
+        self._load_selected()
 
     def _refresh(self) -> None:
         selected = self._selected_value()
@@ -182,11 +186,17 @@ class SessionEditorDialog(QDialog):
                 )
         active_session = self._service.active_session_for_day(self._work_date)
         if active_session is not None:
-            self._tree.addTopLevelItem(
-                self._item(
-                    "Work session (running)", active_session, active_session.actual_started_at, None
-                )
+            session_item = self._item(
+                "Work session (running)", active_session, active_session.actual_started_at, None
             )
+            self._tree.addTopLevelItem(session_item)
+            for deduction in self._service.completed_deductions(active_session.id):
+                label = "Lunch" if deduction.kind.value == "lunch" else "Sleep break"
+                session_item.addChild(
+                    self._item(
+                        label, deduction, deduction.actual_started_at, deduction.actual_ended_at
+                    )
+                )
         self._tree.expandAll()
         first = self._tree.topLevelItem(0)
         if first is not None:
@@ -214,6 +224,37 @@ class SessionEditorDialog(QDialog):
         self._task.setEnabled(isinstance(selected, WorkSession))
         self._save_task.setEnabled(isinstance(selected, WorkSession))
         is_running_session = isinstance(selected, WorkSession) and selected.is_active
+        work_session_selected = isinstance(selected, WorkSession)
+        self._save.setToolTip(
+            "" if enabled else "Select a work session or lunch to correct its times."
+        )
+        self._delete.setToolTip(
+            "Deleted entries can be restored from history for 30 days."
+            if enabled
+            else "Select a work session or lunch to delete."
+        )
+        self._add_lunch.setToolTip(
+            "" if work_session_selected else "Select a work session to add a lunch interval."
+        )
+        self._start.setToolTip(
+            "" if enabled else "Select a work session or lunch to edit its start time."
+        )
+        self._end.setToolTip(
+            "Finish work from Today before changing a running session's end time."
+            if is_running_session
+            else ""
+            if enabled
+            else "Select a work session or lunch to edit its finish time."
+        )
+        task_help = (
+            ""
+            if work_session_selected
+            else "Select a work session to edit its task assignment."
+            if selected is None
+            else "Task assignment applies to work sessions only."
+        )
+        self._task.setToolTip(task_help)
+        self._save_task.setToolTip(task_help)
         self._selection_help.setText(
             "Running session: correct the start here. Finish work from Today."
             if is_running_session
@@ -221,7 +262,7 @@ class SessionEditorDialog(QDialog):
             if enabled
             else "Choose a work session or lunch from the table."
         )
-        self._add_lunch.setEnabled(isinstance(selected, WorkSession) and not is_running_session)
+        self._add_lunch.setEnabled(isinstance(selected, WorkSession))
         if isinstance(selected, WorkSession):
             index = self._task.findData(selected.testhuset_task_id)
             if index < 0:

@@ -37,6 +37,20 @@ def test_month_retains_all_days_and_required_columns(qtbot, rig):
     assert day_item(page, 27).data(0, Qt.ItemDataRole.UserRole).work_date.weekday() == 6
 
 
+def test_refresh_sizes_every_column_to_its_contents(qtbot, rig):
+    page = make_page(qtbot, rig)
+    page.show()
+    for column in range(page._tree.columnCount()):
+        page._tree.setColumnWidth(column, 1)
+
+    page.refresh()
+
+    assert all(
+        page._tree.columnWidth(column) >= page._tree.sizeHintForColumn(column)
+        for column in range(page._tree.columnCount())
+    )
+
+
 def test_week_target_override_does_not_change_default(qtbot, rig):
     page = make_page(qtbot, rig)
     page._tree.setCurrentItem(day_item(page, 28))

@@ -1,6 +1,6 @@
 # QI Flow — active user stories
 
-Version: 1.3 · Updated: 2026-09-28 · Status: active backlog only
+Version: 1.4 · Updated: 2026-09-30 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
@@ -149,3 +149,4 @@ Acceptance criteria:
 - Completed stories: archived in `USER_STORIES_ARCHIVE.md`.
 - US05–US08 (Epic B), US01–US04, US09–US20, US22–US27 and US33–US34 are implemented and verified.
 - US21 and US28–US32 remain in progress or not started as shown above.
+- US35–US40 (Epics M and N) are complete and archived in `USER_STORIES_ARCHIVE.md`.

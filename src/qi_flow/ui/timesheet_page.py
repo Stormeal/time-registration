@@ -164,7 +164,8 @@ class TimesheetPage(QWidget):
         if isinstance(selected_key, IsoWeek) and selected_key in groups:
             self._tree.setCurrentItem(groups[selected_key])
         self._tree.expandAll()
-        self._tree.resizeColumnToContents(0)
+        for column in range(self._tree.columnCount()):
+            self._tree.resizeColumnToContents(column)
         self._tree.blockSignals(False)
         self._select_day()
         if self._selected_week is not None:

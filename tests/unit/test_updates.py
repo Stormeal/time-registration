@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 from dataclasses import replace
 
 import pytest
 
+from qi_flow import __version__
 from qi_flow.infrastructure.updates import ReleaseClient, UpdateError
 
 
@@ -18,7 +20,16 @@ class Response(io.BytesIO):
         self.close()
 
 
-def release_payload(version: str = "v0.2.6", digest: str | None = None) -> bytes:
+def newer_version() -> str:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", __version__)
+    assert match is not None
+    major, minor, patch = match.groups()
+    return f"v{major}.{minor}.{int(patch) + 1}"
+
+
+def release_payload(version: str | None = None, digest: str | None = None) -> bytes:
+    if version is None:
+        version = newer_version()
     return json.dumps(
         {
             "tag_name": version,
@@ -45,11 +56,11 @@ def test_release_check_finds_only_new_stable_versions() -> None:
     update = client.check()
 
     assert update is not None
-    assert update.version == "v0.2.6"
+    assert update.version == newer_version()
     assert update.sha256 == "a" * 64
 
 
-@pytest.mark.parametrize("version", ["v0.2.4", "v0.2.2"])
+@pytest.mark.parametrize("version", [f"v{__version__}", "v0.0.0"])
 def test_release_check_returns_none_when_not_newer(version: str) -> None:
     client = ReleaseClient(lambda *_args, **_kwargs: Response(release_payload(version)))
 
@@ -58,7 +69,7 @@ def test_release_check_returns_none_when_not_newer(version: str) -> None:
 
 @pytest.mark.parametrize(
     ("version", "digest"),
-    [("nightly", None), ("v0.2.6", "sha512:" + "a" * 128)],
+    [("nightly", None), (newer_version(), "sha512:" + "a" * 128)],
 )
 def test_release_check_rejects_untrusted_or_unversioned_metadata(
     version: str, digest: str | None

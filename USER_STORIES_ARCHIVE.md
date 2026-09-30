@@ -696,3 +696,27 @@ checks passed using the existing project virtual environment. Manual monitor/key
 data, installer and authenticated live integration checks remain release work. Existing
 cross-midnight time-only correction and switching rows with unsaved interval edits remain
 pre-existing editor limitations outside this follow-up.
+
+## Epic O — Settings clarity
+
+### US41 — Organize Settings for first-time users · P1
+
+Implementation status: **Complete** · 2026-09-30.
+
+As a new QI Flow user, I want Settings to show clear categories and explanations so that I can
+find and change an option without searching through a long page of controls.
+
+Acceptance criteria:
+
+- Settings opens on a concise overview of available categories. Each category has a plain-English
+  description and one action to open its detail view.
+- Each detail group has at most one button. Tracking, appearance, Google Sheets, Testhuset, DSB,
+  backups, export, updates, and diagnostics remain reachable when configured.
+- Choosing a backup folder saves it immediately. CSV format is selected before one Export action;
+  Google authorization uses one state-aware connect/disconnect action.
+- Existing preference persistence, reminder behavior, update progress, and integration safeguards
+  continue working. Narrow windows scroll vertically without requiring horizontal scrolling.
+
+Verification: `scripts/check.ps1` passes 237 tests, Ruff formatting and lint, and strict mypy.
+Qt interaction tests cover category navigation, one button per group, preference saving, backup
+location, export selection, Google authorization, update progress, and narrow-window scrolling.

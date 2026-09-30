@@ -150,3 +150,4 @@ Acceptance criteria:
 - US05–US08 (Epic B), US01–US04, US09–US20, US22–US27 and US33–US34 are implemented and verified.
 - US21 and US28–US32 remain in progress or not started as shown above.
 - US35–US40 (Epics M and N) are complete and archived in `USER_STORIES_ARCHIVE.md`.
+- US41 (Epic O, Settings clarity) is complete and archived in `USER_STORIES_ARCHIVE.md`.

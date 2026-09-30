@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime
 from io import BytesIO
 
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox, QPushButton
 from pytestqt.qtbot import QtBot
 
 from qi_flow import __version__
@@ -190,6 +190,11 @@ def test_update_download_progress_is_visible_and_reports_received_size(
     monkeypatch.setattr("qi_flow.ui.settings_page.UpdateDownloadWorker.start", lambda _worker: None)
     qtbot.addWidget(page)
     page.show()
+    next(
+        button
+        for button in page.findChildren(QPushButton)
+        if button.accessibleName() == "Open Updates and diagnostics"
+    ).click()
 
     page._update_check_finished(update)
     assert page._update_worker is not None

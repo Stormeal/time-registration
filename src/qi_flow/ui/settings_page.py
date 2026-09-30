@@ -7,7 +7,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QDate, QProcess, QThread, Signal
+from PySide6.QtCore import QCoreApplication, QDate, QProcess, QSize, QThread, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -20,10 +20,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -101,6 +105,18 @@ class UpdateDownloadWorker(QThread):
             self.failed.emit(str(error))
 
 
+class SettingsStack(QStackedWidget):
+    """Size the outer scroll area for the page currently being shown."""
+
+    def sizeHint(self) -> QSize:
+        page = self.currentWidget()
+        return page.sizeHint() if page is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        page = self.currentWidget()
+        return page.minimumSizeHint() if page is not None else super().minimumSizeHint()
+
+
 class SettingsPage(QWidget):
     """Keep resilience actions explicit and make their current state visible."""
 
@@ -141,21 +157,31 @@ class SettingsPage(QWidget):
         self._pending_update: AvailableUpdate | None = None
         self._update_progress: QProgressBar | None = None
 
-        title = QLabel("Settings")
-        font = title.font()
+        self._title = QLabel("Settings")
+        font = self._title.font()
         font.setPointSize(18)
         font.setBold(True)
-        title.setFont(font)
+        self._title.setFont(font)
+        self._introduction = QLabel("Choose an area to change or review.")
+        self._introduction.setWordWrap(True)
+        self._introduction.setProperty("role", "muted")
+        self._back = QPushButton("← All settings")
+        self._back.clicked.connect(self._show_overview)
+        self._back.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._back.setVisible(False)
+        self._stack = SettingsStack()
+        overview, overview_layout = self._detail_page()
+        self._stack.addWidget(overview)
+        general_page, general_layout = self._detail_page()
+        backup_page, backup_layout = self._detail_page()
+        export_page, export_layout = self._detail_page()
+        support_page, support_layout = self._detail_page()
 
         self._backup_folder = QLineEdit()
-        browse = QPushButton("Choose folder")
+        self._backup_folder.setReadOnly(True)
+        self._backup_folder.setAccessibleName("Backup folder")
+        browse = QPushButton("Change folder…")
         browse.clicked.connect(self._choose_backup_folder)
-        save_folder = QPushButton("Save folder")
-        save_folder.clicked.connect(self._save_backup_folder)
-        folder_row = QHBoxLayout()
-        folder_row.addWidget(self._backup_folder, 1)
-        folder_row.addWidget(browse)
-        folder_row.addWidget(save_folder)
         self._backup_warning = QLabel()
         self._backup_warning.setWordWrap(True)
         self._backup_list = QComboBox()
@@ -163,13 +189,36 @@ class SettingsPage(QWidget):
         create_backup.clicked.connect(self._backup_now)
         restore = QPushButton("Restore selected backup")
         restore.clicked.connect(self._restore_selected)
-        backup_form = QFormLayout()
-        backup_form.addRow("Backup folder", folder_row)
-        backup_form.addRow("Status", self._backup_warning)
-        backup_form.addRow("Available backups", self._backup_list)
-        backup_form.addRow(create_backup, restore)
-        backup_group = QGroupBox("Backups and restore")
-        backup_group.setLayout(backup_form)
+        folder_form = QFormLayout()
+        folder_form.addRow("Folder", self._backup_folder)
+        backup_layout.addWidget(
+            self._settings_group(
+                "Backup location",
+                "Choose a local or OneDrive folder. Your choice saves immediately.",
+                folder_form,
+                browse,
+            )
+        )
+        backup_status_form = QFormLayout()
+        backup_status_form.addRow("Status", self._backup_warning)
+        backup_layout.addWidget(
+            self._settings_group(
+                "Create a backup",
+                "QI Flow backs up daily. Make another copy before a risky change.",
+                backup_status_form,
+                create_backup,
+            )
+        )
+        restore_form = QFormLayout()
+        restore_form.addRow("Available backups", self._backup_list)
+        backup_layout.addWidget(
+            self._settings_group(
+                "Restore",
+                "Creates a safety backup, restores your data, then restarts QI Flow.",
+                restore_form,
+                restore,
+            )
+        )
 
         preferences = service.app_preferences()
         self._rounding = QComboBox()
@@ -220,23 +269,43 @@ class SettingsPage(QWidget):
         self._theme.setCurrentIndex(("system", "light", "dark").index(preferences.theme))
         self._startup_enabled = QCheckBox("Start QI Flow with Windows")
         self._startup_enabled.setChecked(startup.is_enabled())
-        save_preferences = QPushButton("Save application settings")
+        save_preferences = QPushButton("Save changes")
+        save_preferences.setObjectName("saveSettings")
         save_preferences.setProperty("role", "primary")
         save_preferences.clicked.connect(self._save_preferences)
         tracking_form = QFormLayout()
-        tracking_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         tracking_form.addRow("Rounding", self._rounding)
         tracking_form.addRow("Default weekly target", self._target)
-        tracking_form.addRow(self._sleep_enabled)
-        tracking_form.addRow("Sleep prompt after", self._sleep_minutes)
-        tracking_form.addRow(self._work_reminder_enabled, self._work_reminder_minutes)
-        tracking_form.addRow(self._lunch_reminder_enabled, self._lunch_reminder_minutes)
-        tracking_group = QGroupBox("Tracking")
-        tracking_group.setLayout(tracking_form)
+        general_layout.addWidget(
+            self._settings_group(
+                "Work time",
+                "Choose future rounding and the target for weeks without a Timesheet override.",
+                tracking_form,
+            )
+        )
+        prompt_form = QFormLayout()
+        prompt_form.addRow(self._sleep_enabled)
+        prompt_form.addRow("Sleep prompt after", self._sleep_minutes)
+        prompt_form.addRow(self._work_reminder_enabled, self._work_reminder_minutes)
+        prompt_form.addRow(self._lunch_reminder_enabled, self._lunch_reminder_minutes)
+        general_layout.addWidget(
+            self._settings_group(
+                "Prompts and reminders",
+                "Sleep gaps ask for your decision; time is never removed automatically. "
+                "Work reminders include lunch.",
+                prompt_form,
+            )
+        )
         app_form = QFormLayout()
-        app_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         app_form.addRow("Theme", self._theme)
         app_form.addRow(self._startup_enabled)
+        general_layout.addWidget(
+            self._settings_group(
+                "Appearance and startup",
+                "Follow Windows colours or choose a theme. Starting with Windows is optional.",
+                app_form,
+            )
+        )
         if releases is not None:
             self._check_updates = QPushButton("Check for updates")
             self._check_updates.clicked.connect(self._check_for_updates)
@@ -247,12 +316,25 @@ class SettingsPage(QWidget):
             self._update_progress.setFormat("%p%")
             self._update_progress.setAccessibleName("Update download progress")
             self._update_progress.setVisible(False)
-            app_form.addRow(self._check_updates)
-            app_form.addRow("Updates", self._update_status)
-            app_form.addRow(self._update_progress)
-        app_form.addRow(save_preferences)
-        application_group = QGroupBox("Appearance and startup")
-        application_group.setLayout(app_form)
+            update_form = QFormLayout()
+            update_form.addRow("Status", self._update_status)
+            update_form.addRow(self._update_progress)
+            support_layout.addWidget(
+                self._settings_group(
+                    "Application updates",
+                    "Check stable releases on request. Installing an update requires confirmation.",
+                    update_form,
+                    self._check_updates,
+                )
+            )
+        save_help = QLabel("Save changes to apply tracking, reminder and appearance settings.")
+        save_help.setWordWrap(True)
+        save_help.setProperty("role", "muted")
+        general_layout.addWidget(save_help)
+        save_row = QHBoxLayout()
+        save_row.addStretch(1)
+        save_row.addWidget(save_preferences)
+        general_layout.addLayout(save_row)
 
         self._scope = QComboBox()
         self._scope.addItems(["Selected week", "Selected month", "All history"])
@@ -260,17 +342,24 @@ class SettingsPage(QWidget):
         self._reference_date = QDateEdit(QDate.currentDate())
         self._reference_date.setCalendarPopup(True)
         self._scope_hint = QLabel()
-        summary = QPushButton("Export summary CSV")
-        summary.clicked.connect(lambda: self._export("summary"))
-        detailed = QPushButton("Export detailed CSV")
-        detailed.clicked.connect(lambda: self._export("detailed"))
+        self._export_kind = QComboBox()
+        self._export_kind.addItem("Summary — daily totals", "summary")
+        self._export_kind.addItem("Detailed — sessions and deductions", "detailed")
+        export_button = QPushButton("Export CSV…")
+        export_button.clicked.connect(self._export_selected)
         export_form = QFormLayout()
+        export_form.addRow("Contents", self._export_kind)
         export_form.addRow("Period", self._scope)
         export_form.addRow("Reference date", self._reference_date)
         export_form.addRow("Selection", self._scope_hint)
-        export_form.addRow(summary, detailed)
-        export_group = QGroupBox("CSV export")
-        export_group.setLayout(export_form)
+        export_layout.addWidget(
+            self._settings_group(
+                "CSV export",
+                "Export daily totals or detailed sessions and deductions to a local CSV file.",
+                export_form,
+                export_button,
+            )
+        )
 
         data_path = QLineEdit(str(paths.data_dir))
         data_path.setReadOnly(True)
@@ -278,19 +367,18 @@ class SettingsPage(QWidget):
         open_logs.clicked.connect(self._open_log_folder)
         diagnostics_form = QFormLayout()
         diagnostics_form.addRow("Application data", data_path)
-        diagnostics_form.addRow("Diagnostics", open_logs)
-        diagnostics_group = QGroupBox("Local diagnostics")
-        diagnostics_group.setLayout(diagnostics_form)
+        support_layout.addWidget(
+            self._settings_group(
+                "Local diagnostics",
+                "Your data and privacy-safe logs stay in your Windows application-data folder.",
+                diagnostics_form,
+                open_logs,
+            )
+        )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
-        layout.addWidget(title)
-        layout.addWidget(tracking_group)
-        layout.addWidget(application_group)
+        connection_page, connection_layout = self._detail_page()
+        workplace_page, workplace_layout = self._detail_page()
         if google_sync is not None:
-            sync_group = QGroupBox("Google Sheets sync")
-            sync_form = QFormLayout(sync_group)
             self._sync_sheet_url = QLineEdit()
             self._sync_client_id = QLineEdit()
             self._sync_client_secret = QLineEdit()
@@ -301,83 +389,271 @@ class SettingsPage(QWidget):
                 self._sync_client_id.setText(saved_sync.oauth_client_id)
             sync_save = QPushButton("Save sync connection")
             sync_save.clicked.connect(self._save_google_sync)
-            save_client = QPushButton("Save OAuth client")
-            save_client.clicked.connect(self._save_google_client)
-            authorize = QPushButton("Authorize this machine")
-            authorize.clicked.connect(self._authorize_google)
-            disconnect = QPushButton("Disconnect Google sync")
-            disconnect.clicked.connect(self._disconnect_google)
-            sync_now = QPushButton("Save & sync now")
-            sync_now.clicked.connect(self._sync_google_now)
-            self._sync_now = sync_now
-            self._sync_progress = QProgressBar()
-            self._sync_progress.setVisible(False)
+            sync_form = QFormLayout()
             sync_form.addRow("Shared Sheet URL", self._sync_sheet_url)
             sync_form.addRow("Desktop OAuth client ID", self._sync_client_id)
-            sync_form.addRow("Desktop OAuth client secret", self._sync_client_secret)
+            connection_layout.addWidget(
+                self._settings_group(
+                    "Shared Sheet",
+                    "Enter the private Sheet and desktop OAuth client ID used on this computer.",
+                    sync_form,
+                    sync_save,
+                )
+            )
             if google_oauth is not None:
-                sync_form.addRow(save_client)
-                sync_form.addRow(authorize, disconnect)
-                sync_form.addRow(sync_now)
-                sync_form.addRow(self._sync_progress)
-                self._sync_status = QLabel()
+                save_client = QPushButton("Save OAuth client")
+                save_client.clicked.connect(self._save_google_client)
+                client_form = QFormLayout()
+                client_form.addRow("Desktop OAuth client secret", self._sync_client_secret)
+                connection_layout.addWidget(
+                    self._settings_group(
+                        "OAuth client",
+                        "Save the client credentials for authorization on this Windows account.",
+                        client_form,
+                        save_client,
+                    )
+                )
+                self._google_auth_button = QPushButton()
+                self._google_auth_button.clicked.connect(self._toggle_google_authorization)
+                self._authorization_status = QLabel()
+                auth_form = QFormLayout()
+                auth_form.addRow("Status", self._authorization_status)
+                connection_layout.addWidget(
+                    self._settings_group(
+                        "Authorization",
+                        "Connect this computer to sync. Disconnecting removes its authorization.",
+                        auth_form,
+                        self._google_auth_button,
+                    )
+                )
+                self._sync_now = QPushButton("Save and sync now")
+                self._sync_now.clicked.connect(self._sync_google_now)
+                self._sync_progress = QProgressBar()
+                self._sync_progress.setVisible(False)
+                self._sync_status = QLabel("Completed records sync only when you ask.")
+                self._sync_status.setWordWrap(True)
+                sync_action_form = QFormLayout()
+                sync_action_form.addRow("Status", self._sync_status)
+                sync_action_form.addRow(self._sync_progress)
+                connection_layout.addWidget(
+                    self._settings_group(
+                        "Synchronize",
+                        "Sync completed records to your Sheet. No workplace hours are submitted.",
+                        sync_action_form,
+                        self._sync_now,
+                    )
+                )
                 self._refresh_google_status()
-                sync_form.addRow(self._sync_status)
-            sync_form.addRow(sync_save)
-            layout.addWidget(sync_group)
         self._testhuset_default = QComboBox()
         self._testhuset_week = QDateEdit(QDate.currentDate())
         self._testhuset_week.setDisplayFormat("dd/MM/yyyy")
         self._testhuset_week.setCalendarPopup(True)
         if testhuset is not None and sheet_factory is not None:
-            group = QGroupBox("Testhuset")
-            form = QFormLayout(group)
             scan = QPushButton("Scan Testhuset tasks")
             scan.clicked.connect(self._scan_testhuset)
             save = QPushButton("Save default task")
             save.clicked.connect(self._save_testhuset_default)
-            save_sign_in = QPushButton("Save sign-in in Windows")
-            save_sign_in.clicked.connect(self._save_testhuset_sign_in)
-            forget_sign_in = QPushButton("Forget saved sign-in")
-            forget_sign_in.clicked.connect(self._forget_testhuset_sign_in)
-            form.addRow("Scan week containing", self._testhuset_week)
-            form.addRow(scan)
-            form.addRow("Default project / task", self._testhuset_default)
-            form.addRow(save)
+            scan_form = QFormLayout()
+            scan_form.addRow("Week containing", self._testhuset_week)
+            workplace_layout.addWidget(
+                self._settings_group(
+                    "Testhuset task list",
+                    "Read tasks for this week. Scanning does not enter hours.",
+                    scan_form,
+                    scan,
+                )
+            )
+            default_form = QFormLayout()
+            default_form.addRow("Default project / task", self._testhuset_default)
+            workplace_layout.addWidget(
+                self._settings_group(
+                    "Testhuset default task",
+                    "Use this task unless a work session has its own assignment.",
+                    default_form,
+                    save,
+                )
+            )
             if credentials is not None:
-                form.addRow(save_sign_in, forget_sign_in)
-            layout.addWidget(group)
+                manage_sign_in = QPushButton("Manage sign-in")
+                sign_in_menu = QMenu(manage_sign_in)
+                sign_in_menu.addAction("Save sign-in in Windows…", self._save_testhuset_sign_in)
+                sign_in_menu.addAction("Forget saved sign-in", self._forget_testhuset_sign_in)
+                manage_sign_in.setMenu(sign_in_menu)
+                workplace_layout.addWidget(
+                    self._settings_group(
+                        "Testhuset sign-in",
+                        "Optional sign-in storage uses Windows Credential Manager for this user.",
+                        QFormLayout(),
+                        manage_sign_in,
+                    )
+                )
             self._refresh_testhuset()
         self._dsb_default = QComboBox()
         self._dsb_week = QDateEdit(QDate.currentDate())
         self._dsb_week.setDisplayFormat("dd/MM/yyyy")
         self._dsb_enabled = QCheckBox("Use DSB time registration")
         if dsb is not None and dsb_sheet_factory is not None:
-            group = QGroupBox("DSB")
-            form = QFormLayout(group)
             self._dsb_enabled.setChecked(dsb.is_enabled())
             self._dsb_enabled.toggled.connect(self._save_dsb_enabled)
             scan = QPushButton("Scan DSB allocations")
             scan.clicked.connect(self._scan_dsb)
             save = QPushButton("Save default allocation")
             save.clicked.connect(self._save_dsb_default)
-            form.addRow(self._dsb_enabled)
-            form.addRow("Scan week containing", self._dsb_week)
-            form.addRow(scan)
-            form.addRow("Default allocation", self._dsb_default)
-            form.addRow(save)
-            layout.addWidget(group)
+            scan_form = QFormLayout()
+            scan_form.addRow(self._dsb_enabled)
+            scan_form.addRow("Week containing", self._dsb_week)
+            workplace_layout.addWidget(
+                self._settings_group(
+                    "DSB allocation list",
+                    "Opt in before scanning. Scanning reads allocations and does not send hours.",
+                    scan_form,
+                    scan,
+                )
+            )
+            default_form = QFormLayout()
+            default_form.addRow("Default allocation", self._dsb_default)
+            workplace_layout.addWidget(
+                self._settings_group(
+                    "DSB default allocation",
+                    "Use this allocation for reviewed DSB registration unless you choose another.",
+                    default_form,
+                    save,
+                )
+            )
             self._refresh_dsb()
-        layout.addWidget(backup_group)
-        layout.addWidget(export_group)
-        layout.addWidget(diagnostics_group)
-        layout.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        layout.addWidget(self._back)
+        layout.addWidget(self._title)
+        layout.addWidget(self._introduction)
+        layout.addWidget(self._stack)
+        self._add_section(
+            overview_layout,
+            general_page,
+            "Tracking and appearance",
+            "Set time rounding, weekly targets, sleep prompts, reminders, theme and startup.",
+        )
+        if google_sync is not None:
+            self._add_section(
+                overview_layout,
+                connection_page,
+                "Google Sheets",
+                "Connect a private Sheet, authorize this computer and sync completed records.",
+            )
+        if (testhuset is not None and sheet_factory is not None) or (
+            dsb is not None and dsb_sheet_factory is not None
+        ):
+            self._add_section(
+                overview_layout,
+                workplace_page,
+                "Workplace connections",
+                "Manage Testhuset tasks and DSB allocations without submitting hours.",
+            )
+        self._add_section(
+            overview_layout,
+            backup_page,
+            "Backups",
+            "Choose backup storage, create a copy or restore earlier data.",
+        )
+        self._add_section(
+            overview_layout,
+            export_page,
+            "Export data",
+            "Save a summary or detailed CSV for a week, month or all history.",
+        )
+        self._add_section(
+            overview_layout,
+            support_page,
+            "Updates and diagnostics",
+            "Check stable releases and locate private application files and logs.",
+        )
+        for section_layout in (
+            overview_layout,
+            general_layout,
+            connection_layout,
+            workplace_layout,
+            backup_layout,
+            export_layout,
+            support_layout,
+        ):
+            section_layout.addStretch(1)
         for settings_form in self.findChildren(QFormLayout):
-            settings_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+            settings_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.refresh()
         self._wheel_guard = SettingsWheelGuard(self)
         for field in [*self.findChildren(QAbstractSpinBox), *self.findChildren(QComboBox)]:
             field.installEventFilter(self._wheel_guard)
+
+    @staticmethod
+    def _detail_page() -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        return page, layout
+
+    @staticmethod
+    def _settings_group(
+        title: str, description: str, form: QFormLayout, action: QPushButton | None = None
+    ) -> QGroupBox:
+        group = QGroupBox(title)
+        group.setObjectName("settingsGroup")
+        group.setAccessibleDescription(description)
+        body = QVBoxLayout(group)
+        body.setSpacing(10)
+        help_text = QLabel(description)
+        help_text.setWordWrap(True)
+        help_text.setProperty("role", "muted")
+        body.addWidget(help_text)
+        body.addLayout(form)
+        if action is not None:
+            action_row = QHBoxLayout()
+            action_row.addStretch(1)
+            action_row.addWidget(action)
+            body.addLayout(action_row)
+        return group
+
+    def _add_section(
+        self, overview: QVBoxLayout, page: QWidget, title: str, description: str
+    ) -> None:
+        index = self._stack.addWidget(page)
+        open_button = QPushButton("Open settings")
+        open_button.setAccessibleName(f"Open {title}")
+
+        def show_section() -> None:
+            self._show_section(index, title, description)
+
+        open_button.clicked.connect(show_section)
+        card = self._settings_group(title, description, QFormLayout(), open_button)
+        card.setObjectName("settingsCategory")
+        overview.addWidget(card)
+
+    def _show_section(self, index: int, title: str, description: str) -> None:
+        self._stack.setCurrentIndex(index)
+        self._title.setText(title)
+        self._introduction.setText(description)
+        self._back.setVisible(True)
+        self._stack.updateGeometry()
+        self.updateGeometry()
+        self._reset_scroll()
+
+    def _reset_scroll(self) -> None:
+        ancestor = self.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea):
+                ancestor.verticalScrollBar().setValue(0)
+                break
+            ancestor = ancestor.parentWidget()
+
+    def _show_overview(self) -> None:
+        self._stack.setCurrentIndex(0)
+        self._title.setText("Settings")
+        self._introduction.setText("Choose an area to change or review.")
+        self._back.setVisible(False)
+        self._stack.updateGeometry()
+        self.updateGeometry()
+        self._reset_scroll()
 
     def refresh(self) -> None:
         status = self._backups.status()
@@ -396,6 +672,7 @@ class SettingsPage(QWidget):
         )
         if selected:
             self._backup_folder.setText(selected)
+            self._save_backup_folder()
 
     def _refresh_testhuset(self) -> None:
         self._testhuset_default.clear()
@@ -488,6 +765,14 @@ class SettingsPage(QWidget):
         except ValueError as error:
             self._show_error("Google authorization", str(error))
 
+    def _toggle_google_authorization(self) -> None:
+        if self._google_oauth is None:
+            return
+        if self._google_oauth.is_authorized():
+            self._disconnect_google()
+        else:
+            self._authorize_google()
+
     def _sync_google_now(self) -> None:
         if self._google_sync is None or self._google_oauth is None:
             return
@@ -523,12 +808,13 @@ class SettingsPage(QWidget):
         self._show_error("Google Sheets sync", "Sync failed. Check authorization and try again.")
 
     def _refresh_google_status(self) -> None:
-        if hasattr(self, "_sync_status") and self._google_oauth is not None:
-            self._sync_status.setText(
-                "Status: authorized"
-                if self._google_oauth.is_authorized()
-                else "Status: not authorized"
-            )
+        if self._google_oauth is None or not hasattr(self, "_authorization_status"):
+            return
+        authorized = self._google_oauth.is_authorized()
+        self._authorization_status.setText("Connected" if authorized else "Not connected")
+        self._google_auth_button.setText(
+            "Disconnect this computer" if authorized else "Authorize this computer"
+        )
 
     def _save_dsb_enabled(self, enabled: bool) -> None:
         if self._dsb is not None:
@@ -804,6 +1090,11 @@ class SettingsPage(QWidget):
                 self._exporter.write_detailed(path, start, end)
         except OSError as error:
             self._show_error("Export failed", str(error))
+
+    def _export_selected(self) -> None:
+        kind = self._export_kind.currentData()
+        if kind in ("summary", "detailed"):
+            self._export(str(kind))
 
     def _selected_range(self) -> tuple[date, date]:
         if self._scope.currentText() == "All history":

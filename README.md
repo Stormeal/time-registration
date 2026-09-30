@@ -65,6 +65,26 @@ application folder and does not require administrator permissions. Uninstalling 
 application files only; QI Flow's local database, settings, backups, and logs stay in the
 private Windows application-data folder.
 
+## Create a prerelease from GitHub Actions
+
+After the workflow is merged to the repository's default branch, open **Actions → Manual Windows
+prerelease → Run workflow**. Select `main`. The optional version field accepts `MAJOR.MINOR.PATCH`,
+such as `0.3.0`. Leave it blank to use the next patch version above the current project version and
+existing numeric version tags. Invalid, duplicate, or non-increasing versions stop before packaging.
+
+The workflow runs the project checks on Windows, builds and smoke-checks the application, creates
+the per-user installer and in-app updater package, and publishes a GitHub prerelease named
+`QI Flow v<version>` with tag `v<version>`. Download these assets from the release:
+
+- `QI-Flow-Setup-<version>.exe`
+- `QI-Flow-Update.zip`
+
+The selected version is stamped only into the build; the workflow does not commit version changes
+to the repository. QI Flow ignores prereleases when checking for updates. After reviewing and
+testing a prerelease, edit it on GitHub, clear **Set as a pre-release**, and mark it as the latest
+release. The existing in-app updater can then discover it as a stable release. Promotion is always
+manual; the workflow only creates prereleases when you run it.
+
 ## Documentation map
 
 - [REQUIREMENTS.md](REQUIREMENTS.md): stable product requirements and delivery scope.
@@ -88,9 +108,10 @@ private Windows application-data folder.
 - Functional user stories: US01–US04 and US09–US20 implemented and verified.
 - Packaging: `scripts/build-installer.ps1` produces a per-user Windows installer. A clean-account
   installation verification remains before release.
-- The same build creates `dist/QI-Flow-Update.zip`; attach it to a published GitHub release using
-  that exact asset name. QI Flow checks the latest stable release on user request and applies an
-  update only after confirmation and SHA-256 verification. No user data or credentials are uploaded.
+- The same installer build creates `dist/QI-Flow-Update.zip`; the manual prerelease workflow
+  attaches it under that exact asset name. QI Flow checks the latest stable release on user request
+  and applies an update only after confirmation and SHA-256 verification. No user data or
+  credentials are uploaded.
 - Corrections and polish: Timesheet offers a completed-entry editor, Today explains configurable
   options with tooltips, and QI Flow uses a dedicated teal Windows icon.
 

@@ -68,7 +68,7 @@ Test `resolve_release_version` for:
 
 - [x] **Step 2: Run resolver tests and confirm they fail because the module/API is missing**
 
-Run: `python -m pytest tests/unit/test_release_version.py -q`  
+Run: `python -m pytest tests/unit/test_release_version.py -q`
 Expected: collection failure for missing `scripts.release_version` import.
 
 - [x] **Step 3: Implement parsing and resolution in `scripts/release_version.py`**
@@ -81,7 +81,7 @@ Test `stamp_release_version` updates only the top-level project version in `pypr
 
 - [x] **Step 5: Run stamping tests and confirm they fail before implementation**
 
-Run: `python -m pytest tests/unit/test_release_version.py -q`  
+Run: `python -m pytest tests/unit/test_release_version.py -q`
 Expected: stamping test failures while resolver tests pass.
 
 - [x] **Step 6: Implement atomic, validated version stamping and the CLI**
@@ -90,7 +90,7 @@ Validate the requested version before file edits. Read both files and confirm ex
 
 - [x] **Step 7: Run focused tests and project checks**
 
-Run: `python -m pytest tests/unit/test_release_version.py -q`  
+Run: `python -m pytest tests/unit/test_release_version.py -q`
 Expected: all version utility tests pass. Also run `python -m ruff check scripts/release_version.py tests/unit/test_release_version.py` and `python -m mypy scripts/release_version.py`.
 
 - [x] **Step 8: Commit the version utility and its tests**
@@ -120,10 +120,10 @@ Run a separate publish job only after the build succeeds. Give it `contents: wri
 
 - [x] **Step 3: Validate workflow syntax, policy, and helper integration**
 
-Run: `actionlint .github/workflows/prerelease.yml`  
+Run: `actionlint .github/workflows/prerelease.yml`
 Expected: exit code 0. Confirm action references are full 40-character SHAs for verified official actions, the workflow permissions are explicit, there are no automatic triggers, and a failed build cannot reach publication.
 
-Run: `python scripts/release_version.py resolve --requested ""`  
+Run: `python scripts/release_version.py resolve --requested ""`
 Expected: print a valid next patch version without changing the checkout. In a temporary copy, run resolve/stamp with an explicit version and verify both declarations match and `git diff` contains only the two temporary version-file edits.
 
 - [x] **Step 4: Commit the workflow**
@@ -134,25 +134,25 @@ Expected: print a valid next patch version without changing the checkout. In a t
 - Modify: `README.md`
 - Uses: `.github/workflows/prerelease.yml` and `scripts/release_version.py` from Tasks 1–2
 
-- [ ] **Step 1: Add maintainer instructions to README**
+- [x] **Step 1: Add maintainer instructions to README**
 
 Document that the workflow becomes manually runnable after merged to the default branch; dispatch it from `main` in Actions → Manual Windows Prerelease. Explain blank input default, how to supply `MAJOR.MINOR.PATCH`, the prerelease tag/title, both asset names, no repository version commit, and how to edit a reviewed release to stable/latest so the app updater can see it.
 
-- [ ] **Step 2: Run the complete project quality gate**
+- [x] **Step 2: Run the complete project quality gate**
 
-Run from PowerShell: `./scripts/check.ps1`  
+Run from PowerShell: `./scripts/check.ps1`
 Expected: Ruff formatting/lint, strict mypy, and the complete pytest suite pass.
 
-- [ ] **Step 3: Run focused workflow/version verification**
+- [x] **Step 3: Run focused workflow/version verification**
 
-Run: `python -m pytest tests/unit/test_release_version.py -q` and `actionlint .github/workflows/prerelease.yml`  
+Run: `python -m pytest tests/unit/test_release_version.py -q` and `actionlint .github/workflows/prerelease.yml`
 Expected: all version cases pass and workflow lint exits 0. Confirm the README asset names match `scripts/build-installer.ps1`, `scripts/build-update-package.py`, and the updater's expected release asset name.
 
-- [ ] **Step 4: Review final diff and limitations**
+- [x] **Step 4: Review final diff and limitations**
 
 Confirm no `GITHUB_TOKEN` is persisted, no source version files are changed in the repository, no release/tag was created during verification, and only the intended workflow, helper/tests, and README documentation changed for this feature. Record that a real hosted Windows prerelease run and manual stable promotion remain maintainer release operations.
 
-- [ ] **Step 5: Commit README and final task documentation**
+- [x] **Step 5: Commit README and final task documentation**
 
 ## Execution
 

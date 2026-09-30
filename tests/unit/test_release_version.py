@@ -14,6 +14,10 @@ def test_default_version_increments_patch_from_greatest_tag() -> None:
     assert resolve_release_version(None, "0.2.5", ["v0.2.3", "v0.2.9"]) == "0.2.10"
 
 
+def test_default_version_increments_past_historical_unprefixed_release_tag() -> None:
+    assert resolve_release_version(None, "0.2.5", ["v0.2.4", "0.2.6"]) == "0.2.7"
+
+
 def test_default_version_falls_back_to_project_version_without_tags() -> None:
     assert resolve_release_version(None, "0.2.5", ["legacy", "v1.2-beta"]) == "0.2.6"
 
@@ -32,6 +36,7 @@ def test_malformed_explicit_version_is_rejected(requested: str) -> None:
     ("requested", "project_version", "tags"),
     [
         ("0.2.6", "0.2.5", ["v0.2.6"]),
+        ("0.2.6", "0.2.5", ["0.2.6"]),
         ("0.2.4", "0.2.5", ["v0.2.3"]),
         ("0.2.8", "0.2.5", ["v0.2.9"]),
     ],

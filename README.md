@@ -70,7 +70,8 @@ private Windows application-data folder.
 After the workflow is merged to the repository's default branch, open **Actions → Manual Windows
 prerelease → Run workflow**. Select `main`. The optional version field accepts `MAJOR.MINOR.PATCH`,
 such as `0.3.0`. Leave it blank to use the next patch version above the current project version and
-existing numeric version tags. Invalid, duplicate, or non-increasing versions stop before packaging.
+existing numeric version tags, including older tags without a `v` prefix. Invalid, duplicate, or
+non-increasing versions stop before packaging.
 
 The workflow runs the project checks on Windows, builds and smoke-checks the application, creates
 the per-user installer and in-app updater package, and publishes a GitHub prerelease named

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from io import BytesIO
 
 from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
+from qi_flow import __version__
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
@@ -49,6 +51,13 @@ class Response(BytesIO):
         self.close()
 
 
+def newer_version() -> str:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", __version__)
+    assert match is not None
+    major, minor, patch = match.groups()
+    return f"v{major}.{minor}.{int(patch) + 1}"
+
+
 def test_settings_can_check_release_feed_without_blocking_the_ui(tmp_path, qtbot: QtBot) -> None:
     database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")
     database.initialize()
@@ -62,7 +71,7 @@ def test_settings_can_check_release_feed_without_blocking_the_ui(tmp_path, qtbot
     paths.ensure()
     release = json.dumps(
         {
-            "tag_name": "v0.2.4",
+            "tag_name": f"v{__version__}",
             "draft": False,
             "prerelease": False,
             "assets": [],
@@ -87,6 +96,7 @@ def test_settings_can_check_release_feed_without_blocking_the_ui(tmp_path, qtbot
 def test_declining_an_update_does_not_download_the_package(
     tmp_path, qtbot: QtBot, monkeypatch
 ) -> None:
+    release_version = newer_version()
     database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")
     database.initialize()
 
@@ -99,13 +109,13 @@ def test_declining_an_update_does_not_download_the_package(
     paths.ensure()
     release = json.dumps(
         {
-            "tag_name": "v0.2.6",
+            "tag_name": release_version,
             "draft": False,
             "prerelease": False,
             "assets": [
                 {
                     "name": "QI-Flow-Update.zip",
-                    "browser_download_url": "https://github.com/Stormeal/time-registration/releases/download/v0.2.6/QI-Flow-Update.zip",
+                    "browser_download_url": f"https://github.com/Stormeal/time-registration/releases/download/{release_version}/QI-Flow-Update.zip",
                     "digest": "sha256:" + "a" * 64,
                     "size": 5,
                 }
@@ -137,10 +147,12 @@ def test_declining_an_update_does_not_download_the_package(
     qtbot.addWidget(page)
 
     page._check_updates.click()
-    qtbot.waitUntil(lambda: page._update_status.text() == "Version v0.2.6 is available.")
+    qtbot.waitUntil(
+        lambda: page._update_status.text() == f"Version {release_version} is available."
+    )
 
     assert calls == 1
-    assert not (paths.data_dir / "updates" / "QI-Flow-v0.2.6.zip").exists()
+    assert not (paths.data_dir / "updates" / f"QI-Flow-{release_version}.zip").exists()
 
 
 def test_update_download_progress_is_visible_and_reports_received_size(

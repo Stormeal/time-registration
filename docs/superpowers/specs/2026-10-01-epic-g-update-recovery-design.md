@@ -6,7 +6,7 @@ Date: 2026-10-01 · Status: proposed for review
 
 QI Flow must keep its per-user installation removable and its time data usable after an in-app update, including an interrupted update. The user has verified the normal latest-stable-release check and update on their machine. This design addresses the four remaining Epic G risks: lost uninstall support, an interrupted folder swap, a leftover recovery folder, and stale Windows startup registration.
 
-The fixed GitHub release feed, explicit update confirmation, SHA-256 verification, and local AppData storage remain as defined in US21 and US32. There is no telemetry or administrator requirement.
+The fixed GitHub release feed, explicit update confirmation, SHA-256 verification, and local AppData storage remain as defined in US21 and US32. There is no telemetry or administrator requirement. The new updater uses a new fixed asset name, `QI-Flow-Update-v2.zip`, to separate its package format from the legacy updater's `QI-Flow-Update.zip`.
 
 ## Chosen layout
 
@@ -33,12 +33,14 @@ The updater changes application files only. It never overwrites or deletes user 
 
 Existing installations place the executable and Inno uninstall files together in `{app}`. Their current updater cannot preserve the uninstall record during a full-folder swap. A one-time per-user installer upgrade moves them to the stable layout, preserves the existing AppData and Inno uninstall registration, updates shortcuts, and rewrites an enabled HKCU Run value to the launcher. The installer removes only known legacy application files after the new layout is usable.
 
-The migration release is distributed with its installer and clear instructions, but without an update ZIP usable by the legacy updater. The old client's missing-package message is explained in the release instructions, with the one-time installer step and data-preservation behavior. This prevents old clients from performing the unsafe full-folder swap. After the one-time migration, future releases again use the in-app update asset. The installer remains available for first installation and recovery.
+The migration release contains the installer and `QI-Flow-Update-v2.zip`, but no asset named `QI-Flow-Update.zip`. Every later release uses the v2 name as well. Legacy clients request only the old name and therefore cannot take the unsafe full-folder update from the migration release or any later release. Their missing-package message is explained in the release notes and README, with the one-time installer step and data-preservation behavior. Once migrated, clients can use the v2 asset for future in-app updates. The installer remains available for first installation and recovery.
+
+The existing manual workflow still builds a Windows prerelease for review and requires manual promotion to latest stable. It must package, validate, and publish the v2 asset name, and never republish the legacy name. Promotion requires the clean-account migration, uninstall, interrupted-update recovery, and data-compatibility smoke checks below. Once promoted, the fixed latest-stable endpoint serves the migration release, so historical release assets need no alteration.
 
 ## Verification and release gate
 
 - Unit and integration tests inject failure before and after each directory move, during launch/readiness, and during cleanup. They verify automatic launcher recovery, idempotent retry, preservation of user data, and a later update despite stale cleanup work.
-- Packaging tests verify the launcher and Inno files stay outside `current`, the update ZIP contains only the app bundle, and uninstall removes new bundle files added by an in-app update.
+- Packaging tests verify the launcher and Inno files stay outside `current`, the v2 update ZIP contains only the app bundle, the legacy asset name is absent from new releases, and uninstall removes new bundle files added by an in-app update.
 - Windows smoke testing on a clean standard-user account covers install, optional startup, update, restart, uninstall, and retained AppData. A second smoke test interrupts the helper between renames, then launches through the normal shortcut and verifies rollback. A third simulates cleanup failure and verifies the following update.
 - Release verification checks database and active-state compatibility with the immediately previous version. `scripts/check.ps1` must pass before publication.
 

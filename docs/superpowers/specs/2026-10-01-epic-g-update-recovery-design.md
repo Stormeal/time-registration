@@ -1,6 +1,6 @@
 # Epic G update recovery design
 
-Date: 2026-10-01 · Status: proposed for review
+Date: 2026-10-01 · Status: approved for implementation
 
 ## Intent and scope
 

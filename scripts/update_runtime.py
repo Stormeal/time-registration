@@ -237,11 +237,12 @@ def install_lock(install_root: Path, timeout_seconds: int = 900) -> Iterator[Non
     root = install_root.resolve(strict=True)
     lock_path = root / "update.lock"
     deadline = time.monotonic() + timeout_seconds
-    with lock_path.open("a+b") as lock_file:
-        lock_file.seek(0)
-        if lock_file.read(1) == b"":
-            lock_file.write(b"0")
-            lock_file.flush()
+    try:
+        with lock_path.open("xb") as created:
+            created.write(b"0")
+    except FileExistsError:
+        pass
+    with lock_path.open("r+b") as lock_file:
         while True:
             try:
                 lock_file.seek(0)

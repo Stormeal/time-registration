@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from functools import partial
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QProcess
+from PySide6.QtCore import QCoreApplication, QProcess, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
@@ -57,6 +58,32 @@ def _guard_key(data_dir: Path) -> str:
     return hashlib.sha1(str(data_dir).encode("utf-8")).hexdigest()[:16]
 
 
+def extract_update_ready_args(arguments: list[str]) -> tuple[list[str], str | None]:
+    """Keep the private updater handshake out of Qt's argument parser."""
+    args = list(arguments)
+    if "--update-ready" not in args:
+        return args, None
+    index = args.index("--update-ready")
+    if index + 1 >= len(args) or args.count("--update-ready") != 1:
+        raise ValueError("Invalid update readiness token.")
+    token = args[index + 1]
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise ValueError("Invalid update readiness token.")
+    return args[:index] + args[index + 2 :], token
+
+
+def _signal_update_ready(token: str) -> None:
+    executable = Path(sys.executable).resolve()
+    if not getattr(sys, "frozen", False) or executable.parent.name.casefold() != "current":
+        return
+    root = executable.parent.parent
+    if root.name.casefold() != "qi flow":
+        return
+    marker = root / "update-work" / f"ready-{token}"
+    marker.parent.mkdir(exist_ok=True)
+    marker.write_text(token, encoding="ascii")
+
+
 def build_runtime(data_root: Path | None = None) -> RuntimeContext:
     """Prepare local infrastructure without constructing widgets."""
     paths = _resolve_paths(data_root)
@@ -73,7 +100,7 @@ def run(argv: list[str] | None = None) -> int:
     QCoreApplication.setApplicationName("QI Flow")
     QCoreApplication.setApplicationVersion(__version__)
 
-    args = list(argv if argv is not None else sys.argv)
+    args, update_token = extract_update_ready_args(list(argv if argv is not None else sys.argv))
     start_minimized = START_MINIMIZED_FLAG in args
     args = [value for value in args if value != START_MINIMIZED_FLAG]
 
@@ -197,6 +224,8 @@ def run(argv: list[str] | None = None) -> int:
             "Review the defaults in Settings, then choose Save application settings to finish "
             "setup.",
         )
+    if update_token is not None:
+        QTimer.singleShot(0, lambda: _signal_update_ready(update_token))
     exit_code = app.exec()
     if tray is not None:
         tray.hide()

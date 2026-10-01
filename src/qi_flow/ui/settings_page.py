@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -1004,36 +1003,32 @@ class SettingsPage(QWidget):
         self._update_status.setText("Download verified. Preparing to install the update…")
         app_executable = Path(sys.executable).resolve()
         install_dir = app_executable.parent
-        bundled_helper = install_dir / "QI Flow Updater.exe"
-        if not bundled_helper.is_file() or install_dir.name.casefold() != "qi flow":
+        install_root = install_dir.parent
+        launcher = install_root / "QI Flow Launcher.exe"
+        if (
+            install_dir.name.casefold() != "current"
+            or install_root.name.casefold() != "qi flow"
+            or not launcher.is_file()
+        ):
             self._update_failed(
                 "In-app updates are available from an installed Windows build only."
             )
             return
-        updates_dir = self._paths.data_dir / "updates"
-        helper = updates_dir / "QI Flow Updater.exe"
-        try:
-            updates_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled_helper, helper)
-        except OSError:
-            self._update_failed("The update helper could not be staged in your user data folder.")
-            return
         success, _ = QProcess.startDetached(
-            str(helper),
+            str(launcher),
             [
+                "--apply-update",
                 "--pid",
                 str(QCoreApplication.applicationPid()),
                 "--archive",
                 str(archive),
-                "--install-dir",
-                str(install_dir),
                 "--sha256",
                 self._pending_update.sha256,
             ],
-            str(updates_dir),
+            str(install_root),
         )
         if not success:
-            self._update_failed("The update helper could not be started. QI Flow is unchanged.")
+            self._update_failed("The update launcher could not be started. QI Flow is unchanged.")
             return
         self._update_status.setText("Installing the verified update and restarting QI Flow…")
         QCoreApplication.quit()

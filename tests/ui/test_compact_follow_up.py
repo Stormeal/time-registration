@@ -46,6 +46,13 @@ def test_session_editor_keeps_table_readable_and_selects_session(qtbot, rig):
     assert dialog._save.isEnabled()
 
 
+def test_session_editor_opens_at_wide_two_column_size(qtbot, rig):
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
+    qtbot.addWidget(dialog)
+
+    assert dialog.width() == 1100
+
+
 def test_disabled_session_editor_actions_explain_required_selection(qtbot, rig):
     dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
     qtbot.addWidget(dialog)

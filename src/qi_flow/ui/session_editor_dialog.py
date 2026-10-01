@@ -58,7 +58,7 @@ class SessionEditorDialog(QDialog):
         self._work_date = work_date
         self._testhuset = testhuset
         self.setWindowTitle(f"Edit sessions - {work_date:%d/%m/%Y}")
-        self.resize(840, 600)
+        self.resize(1100, 600)
         self._tree = QTreeWidget()
         self._tree.setHeaderLabels(("Type", "Start", "Finish"))
         self._tree.setMinimumSize(260, 200)

@@ -178,15 +178,16 @@ def test_update_download_progress_is_visible_and_reports_received_size(
         releases=ReleaseClient(lambda *_args, **_kwargs: Response(b"{}")),
     )
     update = AvailableUpdate(
-        "v0.2.6",
-        "https://github.com/Stormeal/time-registration/releases/download/v0.2.6/QI-Flow-Update.zip",
+        "v0.2.7",
+        "https://github.com/Stormeal/time-registration/releases/download/v0.2.7/QI-Flow-Update.zip",
         "a" * 64,
         104_857_600,
     )
     monkeypatch.setattr(
         QMessageBox,
         "question",
-        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+        # QMessageBox.question returns the enum's integer value in PySide6.
+        lambda *_args, **_kwargs: int(QMessageBox.StandardButton.Yes),
     )
     monkeypatch.setattr("qi_flow.ui.settings_page.UpdateDownloadWorker.start", lambda _worker: None)
     qtbot.addWidget(page)

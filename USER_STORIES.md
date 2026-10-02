@@ -1,6 +1,6 @@
 # QI Flow — active user stories
 
-Version: 1.4 · Updated: 2026-09-30 · Status: active backlog only
+Version: 1.5 · Updated: 2026-10-02 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
@@ -10,8 +10,8 @@ after its acceptance criteria pass and any required release smoke check is recor
 
 | Status | Stories | Remaining work |
 | --- | --- | --- |
-| In progress | US21 | Clean-account installer and upgrade verification; package Google sync dependencies. |
-| In progress | US32 | Updater and package staging are implemented; a published release asset and clean-install smoke test remain. |
+| In progress | US21 | Clean-account installer migration, startup, uninstall, and retained-data smoke checks. |
+| In progress | US32 | Publish the v2 asset after interrupted-update, cleanup-retry, and database rollback smoke checks. |
 | In progress | US28 | Complete authorization and synchronization behavior. |
 | In progress | US29 | Completed sessions and deductions merge through the shared sheet; explicit conflict resolution and other record types remain. |
 | In progress | US30 | Live DSB smoke check and release verification. |
@@ -34,7 +34,7 @@ Acceptance criteria:
 
 ### US32 — Update QI Flow in place · P2
 
-Implementation status: **In progress** · manual release checks, verified download, staging, and helper-based replacement are implemented; a published update asset and Windows release smoke test remain.
+Implementation status: **In progress** · the user verified the existing latest-release check and normal in-app update. The stable-launcher recovery and v2 package are implemented and covered by automated tests; the migrated installer and failure-path Windows release smoke checks remain.
 
 As a QI Flow user, I want to receive and apply verified application updates from inside the app so
 that I do not have to find, download, and run a new installer for every release.

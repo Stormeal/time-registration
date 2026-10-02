@@ -36,3 +36,14 @@ complete until every row has an observed passing result.
   or user-data smoke test above.
 - The user's earlier check verified the legacy version's latest-release lookup and ordinary
   in-app update. The v2 release must still pass the remaining candidate and post-promotion rows.
+
+## Verification after syncing with `main` on 2026-10-02
+
+- Rebasing onto `main` commit `40e0b91` completed without conflicts.
+- `scripts/check.ps1` passed: formatting, lint, mypy, and 273 tests.
+- Standalone launcher and update-package scripts passed Ruff formatting and lint checks.
+- A fresh isolated build produced `QI-Flow-Update-v2.zip` and
+  `QI-Flow-Setup-0.2.6.exe`. ZIP inspection found `QI Flow/QI Flow.exe` and no
+  launcher in the update payload.
+- The clean-account migration, failure-path, and post-promotion smoke rows above
+  remain pending before Epic G can close.

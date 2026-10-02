@@ -93,7 +93,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         run: |
           $installer = "dist/installer/QI-Flow-Setup-$env:RELEASE_VERSION.exe"
-          $updater = "dist/QI-Flow-Update.zip"
+          $updater = "dist/QI-Flow-Update-v2.zip"
           foreach ($asset in @($installer, $updater)) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
               throw "Required release asset is missing: $asset"
@@ -133,12 +133,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
           RELEASE_TARGET: ${{ github.sha }}
+          MIGRATION_NOTE: >-
+            Existing QI Flow installations must run the per-user installer once to migrate to
+            the stable launcher. Your time records, settings, and backups in AppData are retained.
+            Older versions look for QI-Flow-Update.zip, which is intentionally absent from this
+            and later releases; a missing-package message means you need the installer. After
+            migration, future in-app updates use QI-Flow-Update-v2.zip.
         shell: bash
         run: |
           gh release create "v${RELEASE_VERSION}" \
             --title "QI Flow v${RELEASE_VERSION}" \
             --generate-notes \
+            --notes "$MIGRATION_NOTE" \
             --prerelease \
             --target "${RELEASE_TARGET}" \
             "release-assets/QI-Flow-Setup-${RELEASE_VERSION}.exe" \
-            "release-assets/QI-Flow-Update.zip"
+            "release-assets/QI-Flow-Update-v2.zip"

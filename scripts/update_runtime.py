@@ -163,8 +163,21 @@ def recover_install(install_root: Path) -> str:
     stage_dir, previous, failed = _paths(root, record["id"])
     if previous.is_dir():
         if current.exists():
+            if failed.exists():
+                shutil.rmtree(failed)
             current.replace(failed)
         previous.replace(current)
+        journal.unlink()
+        for leftover in (failed, stage_dir):
+            with contextlib.suppress(OSError):
+                if leftover.exists():
+                    shutil.rmtree(leftover)
+        return "restored"
+    if current.is_dir() and (record["phase"] == "old_moved" or failed.is_dir()):
+        if not (current / "QI Flow.exe").is_file():
+            raise RuntimeError(
+                "The restored QI Flow bundle is incomplete; run the recovery installer."
+            )
         journal.unlink()
         for leftover in (failed, stage_dir):
             with contextlib.suppress(OSError):
@@ -188,7 +201,7 @@ def apply_update(
 ) -> None:
     """Verify, replace, and trial-launch only the replaceable app bundle."""
     root = install_root.resolve(strict=True)
-    if root.name.casefold() != "qi flow" or not (root / "current").is_dir():
+    if not (root / "QI Flow Launcher.exe").is_file() or not (root / "current").is_dir():
         raise ValueError("The QI Flow installation folder was not found.")
     archive = archive.resolve(strict=True)
     if archive.is_relative_to(root):

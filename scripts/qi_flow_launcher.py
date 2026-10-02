@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import ctypes
 import os
 import re
@@ -24,6 +23,7 @@ class Process(Protocol):
     def poll(self) -> int | None: ...
 
     def terminate(self) -> None: ...
+    def kill(self) -> None: ...
 
     def wait(self, timeout: float | None = None) -> int: ...
 
@@ -61,19 +61,29 @@ def trial_launch(
     marker.unlink(missing_ok=True)
     process = start([str(executable), "--update-ready", transaction_id], executable.parent)
     deadline = time.monotonic() + timeout_seconds
+    accepted = False
     try:
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 return False
             if marker.is_file() and marker.read_text(encoding="ascii") == transaction_id:
-                return process.poll() is None
+                grace_deadline = min(deadline, time.monotonic() + 0.5)
+                while time.monotonic() < grace_deadline:
+                    if process.poll() is not None:
+                        return False
+                    time.sleep(0.05)
+                accepted = process.poll() is None
+                return accepted
             time.sleep(0.05)
         return False
     finally:
         marker.unlink(missing_ok=True)
-        if process.poll() is None and time.monotonic() >= deadline:
+        if not accepted and process.poll() is None:
             process.terminate()
-            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
                 process.wait(timeout=5)
 
 
@@ -122,11 +132,17 @@ def main(argv: list[str] | None = None) -> int:
                 apply_update(options.archive, root, options.sha256, trial_launch)
             return 0
         except Exception as error:
-            _show_error(f"QI Flow could not complete the update: {error}\n\nRun the recovery installer if QI Flow does not reopen.")
+            _show_error(
+                f"QI Flow could not complete the update: {error}\n\n"
+                "Run the recovery installer if QI Flow does not reopen."
+            )
             try:
                 launch(root, [])
             except Exception:
-                _show_error("QI Flow could not restore its application files. Run the per-user recovery installer. Your time data remains in AppData.")
+                _show_error(
+                    "QI Flow could not restore its application files. "
+                    "Run the per-user recovery installer. Your time data remains in AppData."
+                )
             return 1
     try:
         launch(root, arguments)

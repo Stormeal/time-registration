@@ -63,6 +63,15 @@ def test_bad_digest_leaves_existing_bundle_usable(tmp_path: Path) -> None:
     assert (root / "current" / "QI Flow.exe").read_bytes() == b"old application"
 
 
+def test_update_supports_a_custom_installer_directory(tmp_path: Path) -> None:
+    root = install(tmp_path).rename(tmp_path / "Programs" / "Custom QI Folder")
+    archive, digest = package(tmp_path)
+
+    runtime().apply_update(archive, root, digest, lambda *_args: True)
+
+    assert (root / "current" / "QI Flow.exe").read_bytes() == b"new application"
+
+
 def test_unsafe_archive_path_is_rejected_before_swap(tmp_path: Path) -> None:
     root = install(tmp_path)
     archive = tmp_path / "unsafe.zip"
@@ -159,4 +168,55 @@ def test_malformed_transaction_cannot_escape_install_root(tmp_path: Path) -> Non
         runtime().recover_install(root)
 
     assert (outside / "keep.txt").read_text(encoding="utf-8") == "untouched"
+    assert (root / "current" / "QI Flow.exe").read_bytes() == b"old application"
+
+
+def test_recovery_can_finish_after_interruption_during_rollback(tmp_path: Path) -> None:
+    root = install(tmp_path)
+    token = "c" * 32
+    work = root / "update-work"
+    work.mkdir()
+    (work / f"failed-{token}").mkdir()
+    (work / f"failed-{token}" / "QI Flow.exe").write_bytes(b"unvalidated new")
+    (root / "update-transaction.json").write_text(
+        json.dumps(
+            {
+                "id": token,
+                "phase": "new_moved",
+                "previous": f"update-work/previous-{token}",
+                "staging": f"update-work/stage-{token}/QI Flow",
+                "sha256": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert runtime().recover_install(root) == "restored"
+    assert runtime().recover_install(root) == "unchanged"
+    assert (root / "current" / "QI Flow.exe").read_bytes() == b"old application"
+    assert not (work / f"failed-{token}").exists()
+
+
+def test_recovery_can_retry_when_unvalidated_bundle_was_moved_aside(tmp_path: Path) -> None:
+    root = install(tmp_path)
+    token = "d" * 32
+    work = root / "update-work"
+    work.mkdir()
+    (root / "current").replace(work / f"previous-{token}")
+    (work / f"failed-{token}").mkdir()
+    (work / f"failed-{token}" / "QI Flow.exe").write_bytes(b"unvalidated new")
+    (root / "update-transaction.json").write_text(
+        json.dumps(
+            {
+                "id": token,
+                "phase": "new_moved",
+                "previous": f"update-work/previous-{token}",
+                "staging": f"update-work/stage-{token}/QI Flow",
+                "sha256": "a" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert runtime().recover_install(root) == "restored"
     assert (root / "current" / "QI Flow.exe").read_bytes() == b"old application"

@@ -117,8 +117,8 @@ def test_declining_an_update_does_not_download_the_package(
             "prerelease": False,
             "assets": [
                 {
-                    "name": "QI-Flow-Update.zip",
-                    "browser_download_url": f"https://github.com/Stormeal/time-registration/releases/download/{release_version}/QI-Flow-Update.zip",
+                    "name": "QI-Flow-Update-v2.zip",
+                    "browser_download_url": f"https://github.com/Stormeal/time-registration/releases/download/{release_version}/QI-Flow-Update-v2.zip",
                     "digest": "sha256:" + "a" * 64,
                     "size": 5,
                 }
@@ -181,7 +181,7 @@ def test_update_download_progress_is_visible_and_reports_received_size(
     )
     update = AvailableUpdate(
         "v0.2.7",
-        "https://github.com/Stormeal/time-registration/releases/download/v0.2.7/QI-Flow-Update.zip",
+        "https://github.com/Stormeal/time-registration/releases/download/v0.2.7/QI-Flow-Update-v2.zip",
         "a" * 64,
         104_857_600,
     )
@@ -231,7 +231,7 @@ def test_real_yes_click_starts_update_download(tmp_path, qtbot: QtBot, monkeypat
     version = newer_version()
     update = AvailableUpdate(
         version,
-        f"https://github.com/Stormeal/time-registration/releases/download/{version}/QI-Flow-Update.zip",
+        f"https://github.com/Stormeal/time-registration/releases/download/{version}/QI-Flow-Update-v2.zip",
         "a" * 64,
         126_679_954,
     )
@@ -258,8 +258,9 @@ def test_real_yes_click_starts_update_download(tmp_path, qtbot: QtBot, monkeypat
 
 
 @pytest.mark.parametrize("dispatch_succeeds", [True, False])
+@pytest.mark.parametrize("folder_name", ["QI Flow", "Custom QI Folder"])
 def test_verified_download_starts_stable_launcher_before_quitting(
-    tmp_path: Path, qtbot: QtBot, monkeypatch, dispatch_succeeds: bool
+    tmp_path: Path, qtbot: QtBot, monkeypatch, dispatch_succeeds: bool, folder_name: str
 ) -> None:
     from qi_flow.ui import settings_page
 
@@ -279,7 +280,7 @@ def test_verified_download_starts_stable_launcher_before_quitting(
         releases=ReleaseClient(lambda *_args, **_kwargs: Response(b"{}")),
     )
     qtbot.addWidget(page)
-    root = tmp_path / "Programs" / "QI Flow"
+    root = tmp_path / "Programs" / folder_name
     current = root / "current"
     current.mkdir(parents=True)
     (current / "QI Flow.exe").write_bytes(b"app")

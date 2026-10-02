@@ -77,11 +77,26 @@ def _signal_update_ready(token: str) -> None:
     if not getattr(sys, "frozen", False) or executable.parent.name.casefold() != "current":
         return
     root = executable.parent.parent
-    if root.name.casefold() != "qi flow":
+    if not (root / "QI Flow Launcher.exe").is_file():
         return
     marker = root / "update-work" / f"ready-{token}"
     marker.parent.mkdir(exist_ok=True)
     marker.write_text(token, encoding="ascii")
+
+
+def _restart_after_restore(update_token: str | None) -> bool:
+    """A provisional update must fail its trial instead of spawning an untracked app."""
+    if update_token is not None:
+        return False
+    executable = Path(sys.executable).resolve()
+    if getattr(sys, "frozen", False) and executable.parent.name.casefold() == "current":
+        root = executable.parent.parent
+        launcher = root / "QI Flow Launcher.exe"
+        if launcher.is_file():
+            QProcess.startDetached(str(launcher), sys.argv[1:], str(root))
+            return True
+    QProcess.startDetached(sys.executable, sys.argv[1:])
+    return True
 
 
 def build_runtime(data_root: Path | None = None) -> RuntimeContext:
@@ -145,9 +160,9 @@ def run(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Restore failed", str(restore_error))
             guard.release()
             return 1
-        QProcess.startDetached(sys.executable, sys.argv[1:])
         guard.release()
-        return 0
+        restarted = _restart_after_restore(update_token)
+        return 0 if restarted else 1
     log.info("QI Flow %s started; data directory initialized", __version__)
 
     service = TimeTrackingApplicationService(
@@ -202,7 +217,6 @@ def run(argv: list[str] | None = None) -> int:
         tray.open_timesheet_requested.connect(window.show_timesheet)
         tray.settings_requested.connect(window.show_settings)
         tray.close_app_requested.connect(exit_coordinator.request_exit)
-        tray.show()
     else:
         tray = None
         app.setQuitOnLastWindowClosed(True)
@@ -214,18 +228,27 @@ def run(argv: list[str] | None = None) -> int:
     show_window = (
         tray is None or not start_minimized or service.recovery_state() is not None or first_setup
     )
-    if show_window:
-        window.show()
-    if first_setup:
-        window.show_settings()
-        QMessageBox.information(
-            window,
-            "Welcome to QI Flow",
-            "Review the defaults in Settings, then choose Save application settings to finish "
-            "setup.",
-        )
-    if update_token is not None:
-        QTimer.singleShot(0, lambda: _signal_update_ready(update_token))
+
+    def finish_startup() -> None:
+        if update_token is not None:
+            _signal_update_ready(update_token)
+        if tray is not None:
+            tray.show()
+        if show_window:
+            window.show()
+        if first_setup:
+            window.show_settings()
+            QMessageBox.information(
+                window,
+                "Welcome to QI Flow",
+                "Review the defaults in Settings, then choose Save application settings to finish "
+                "setup.",
+            )
+
+    if update_token is None:
+        finish_startup()
+    else:
+        QTimer.singleShot(0, finish_startup)
     exit_code = app.exec()
     if tray is not None:
         tray.hide()

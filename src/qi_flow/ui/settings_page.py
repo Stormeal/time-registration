@@ -1005,11 +1005,7 @@ class SettingsPage(QWidget):
         install_dir = app_executable.parent
         install_root = install_dir.parent
         launcher = install_root / "QI Flow Launcher.exe"
-        if (
-            install_dir.name.casefold() != "current"
-            or install_root.name.casefold() != "qi flow"
-            or not launcher.is_file()
-        ):
+        if install_dir.name.casefold() != "current" or not launcher.is_file():
             self._update_failed(
                 "In-app updates are available from an installed Windows build only."
             )

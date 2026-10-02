@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import subprocess
 import zipfile
 from pathlib import Path
 from threading import Event, Thread
@@ -19,6 +20,7 @@ def installation(tmp_path: Path) -> Path:
     current = root / "current"
     current.mkdir(parents=True)
     (current / "QI Flow.exe").write_bytes(b"old")
+    (root / "QI Flow Launcher.exe").write_bytes(b"stable launcher")
     return root
 
 
@@ -92,6 +94,9 @@ class LivingProcess:
     def terminate(self) -> None:
         self.terminated = True
 
+    def kill(self) -> None:
+        self.terminated = True
+
     def wait(self, timeout: float | None = None) -> int:
         assert timeout is not None
         return 0
@@ -131,6 +136,61 @@ def test_trial_rejects_mismatched_readiness_marker(tmp_path: Path) -> None:
     assert process.terminated
 
 
+def test_trial_rejects_process_that_exits_just_after_readiness(tmp_path: Path) -> None:
+    root = installation(tmp_path)
+    executable = root / "current" / "QI Flow.exe"
+    token = "e" * 32
+
+    class ExitingProcess(LivingProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return 1 if self.polls >= 3 else None
+
+    process = ExitingProcess()
+
+    def start(_command: list[str], _cwd: Path) -> ExitingProcess:
+        marker = root / "update-work" / f"ready-{token}"
+        marker.parent.mkdir(exist_ok=True)
+        marker.write_text(token, encoding="ascii")
+        return process
+
+    assert not launcher().trial_launch(executable, token, start, timeout_seconds=0.2)
+
+
+def test_trial_kills_a_process_that_ignores_termination(tmp_path: Path) -> None:
+    root = installation(tmp_path)
+    executable = root / "current" / "QI Flow.exe"
+    token = "9" * 32
+
+    class StubbornProcess(LivingProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.killed = False
+
+        def poll(self) -> int | None:
+            return 1 if self.killed else None
+
+        def wait(self, timeout: float | None = None) -> int:
+            if not self.killed:
+                raise subprocess.TimeoutExpired(str(executable), timeout)
+            return 1
+
+        def kill(self) -> None:
+            self.killed = True
+
+    process = StubbornProcess()
+
+    assert not launcher().trial_launch(
+        executable, token, lambda *_args: process, timeout_seconds=0.1
+    )
+    assert process.terminated
+    assert process.killed
+
+
 def test_app_rejects_an_invalid_readiness_token() -> None:
     from qi_flow import bootstrap
 
@@ -146,3 +206,47 @@ def test_app_removes_valid_readiness_arguments_before_qt() -> None:
         ["--start-minimized"],
         token,
     )
+
+
+def test_database_restore_does_not_restart_a_trial_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    from qi_flow import bootstrap
+
+    started: list[object] = []
+    monkeypatch.setattr(bootstrap.QProcess, "startDetached", lambda *args: started.append(args))
+
+    bootstrap._restart_after_restore("a" * 32)
+
+    assert started == []
+
+
+def test_database_restore_restarts_through_stable_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qi_flow import bootstrap
+
+    root = installation(tmp_path)
+    executable = root / "current" / "QI Flow.exe"
+    started: list[tuple[object, ...]] = []
+    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bootstrap.sys, "executable", str(executable))
+    monkeypatch.setattr(bootstrap.sys, "argv", [str(executable), "--start-minimized"])
+    monkeypatch.setattr(bootstrap.QProcess, "startDetached", lambda *args: started.append(args))
+
+    bootstrap._restart_after_restore(None)
+
+    assert started == [(str(root / "QI Flow Launcher.exe"), ["--start-minimized"], str(root))]
+
+
+def test_app_signals_readiness_in_custom_installer_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qi_flow import bootstrap
+
+    root = installation(tmp_path).rename(tmp_path / "Programs" / "Custom QI Folder")
+    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bootstrap.sys, "executable", str(root / "current" / "QI Flow.exe"))
+    token = "f" * 32
+
+    bootstrap._signal_update_ready(token)
+
+    assert (root / "update-work" / f"ready-{token}").read_text(encoding="ascii") == token

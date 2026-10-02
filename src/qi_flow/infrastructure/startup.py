@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import suppress
+from pathlib import Path
 from types import ModuleType
 from typing import Protocol
 
@@ -67,7 +68,10 @@ class WindowsStartupManager:
     @staticmethod
     def _default_command() -> str:
         if getattr(sys, "frozen", False):
-            return f'"{sys.executable}" {START_MINIMIZED_FLAG}'
+            executable = Path(sys.executable)
+            if executable.parent.name.casefold() == "current":
+                executable = executable.parent.parent / "QI Flow Launcher.exe"
+            return f'"{executable}" {START_MINIMIZED_FLAG}'
         return f'"{sys.executable}" -m qi_flow {START_MINIMIZED_FLAG}'
 
 

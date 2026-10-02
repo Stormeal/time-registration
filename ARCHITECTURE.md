@@ -161,20 +161,24 @@ The adapter reloads the server sheet before confirmation reconciliation. Because
 does not offer UI-level atomic compare-and-set, simultaneous external edits remain a limitation.
 Browser integration tests intercept all page requests and exercise the DOM/save contract in Edge.
 
-### Epic G updater (2026-09-27)
+### Epic G updater (2026-10-02)
 
 The infrastructure release client reads only the public GitHub latest-release endpoint and
 downloads a fixed-name update ZIP after explicit user confirmation. It validates the version,
 asset URL, size, and release asset SHA-256 digest before staging under the existing per-user
 application-data directory. It sends no local identity or time-tracking data.
 
-The standard-library updater helper is copied out of the install folder before launch so Windows
-does not lock the helper while replacing the application directory. It waits for QI Flow to exit,
-re-verifies the staged package, rejects unsafe archive paths, stages on the install volume, and
-renames the old app folder aside before moving the new folder into place. Failed replacement
-restores the previous folder; user data remains outside the install directory. Release assets must
-use the expected filename and expose a SHA-256 digest. The installer remains available for first
-installs and recovery.
+The per-user installer owns a stable `QI Flow Launcher.exe` and Inno uninstall files in the
+installation root. The application bundle is under `current`. Shortcuts and optional Windows
+startup target the launcher. It serializes launches and updates with a Windows file lock, repairs
+an interrupted transaction from an atomic journal, and starts `current/QI Flow.exe`. The
+verified v2 release ZIP contains only this replaceable bundle. The launcher waits for the old
+process, re-verifies the ZIP digest and paths, stages on the install volume, then swaps only
+`current`. The new app reports a transaction-specific readiness marker after startup; failure
+restores the prior bundle. Committed previous bundles are cleaned up on a later launch if deletion
+fails. AppData remains outside the install directory. The installer is the one-time migration and
+recovery path; the old ZIP name is no longer published so legacy clients cannot apply the new
+layout through their full-folder updater.
 
 ### Before implementation
 

@@ -101,3 +101,20 @@ def test_installer_is_per_user_and_leaves_application_data_on_uninstall() -> Non
     assert "{#MyAppBundleDir}" in installer
     assert "{#MyAppOutputDir}" in installer
     assert "remain in your private Windows application-data folder" in installer
+
+
+def test_uninstall_removes_only_its_own_optional_startup_entry() -> None:
+    installer = Path("installer/QIFlow.iss").read_text(encoding="utf-8")
+
+    assert (
+        "RegQueryStringValue(HKEY_CURRENT_USER, StartupRunKey, 'QI Flow', StartupCommand)"
+        in installer
+    )
+    assert "CompareText(StartupCommand, ExpectedStartupCommand) = 0" in installer
+    assert "RegDeleteValue(HKEY_CURRENT_USER, StartupRunKey, 'QI Flow')" in installer
+
+
+def test_uninstall_cleans_app_owned_runtime_files_added_by_updates() -> None:
+    installer = Path("installer/QIFlow.iss").read_text(encoding="utf-8")
+
+    assert '[UninstallDelete]\nType: filesandordirs; Name: "{app}\\_internal"' in installer

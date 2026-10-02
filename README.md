@@ -63,7 +63,10 @@ winget install --id JRSoftware.InnoSetup -e
 The installer is written to `dist\installer`. It installs under the current user's local
 application folder and does not require administrator permissions. Uninstalling removes the
 application files only; QI Flow's local database, settings, backups, and logs stay in the
-private Windows application-data folder.
+private Windows application-data folder. It also removes **Start with Windows** when that
+registration still points to the installation being removed. In-app updates retain the installed
+uninstaller; installations made before this cleanup change need one installer upgrade to receive
+the new uninstall behavior.
 
 ## Create a prerelease from GitHub Actions
 

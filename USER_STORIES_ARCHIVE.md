@@ -16,7 +16,7 @@ These stories implement the confirmed local-only scope in `REQUIREMENTS.md` and 
 | Complete | US01–US04, US09–US20 | Implemented and covered by automated checks. |
 | Complete | US22–US24 | Implemented and covered by automated checks. |
 | Complete | US05–US08 | Correction, history, daily context, and sleep recovery implemented and covered by automated checks. |
-| In progress | US21 | Installer configuration is ready; clean-account verification remains. |
+| In progress | US21 | Installer and uninstall cleanup are implemented; clean-account verification remains. |
 | Complete | US25–US27 | Epic I implemented and covered by automated checks; live first-fill and packaged smoke checks remain. |
 
 ## Epic A — Core tracking
@@ -312,7 +312,8 @@ Acceptance criteria:
 
 ### US21 — Install and upgrade on Windows · P2
 
-Implementation status: **In progress**.
+Implementation status: **In progress** · optional startup cleanup and preservation of user data
+are implemented; clean-account install, upgrade, and uninstall verification remains.
 
 As a consultant, I want a per-user installer so that I can run QI Flow on permitted Windows machines without administrator rights.
 
@@ -738,3 +739,25 @@ Acceptance criteria:
 - Canceling the prompt leaves work stopped.
 - The selected task is persisted with the active session before the UI reports that work started.
 - If no tasks have been scanned, **Start work** keeps its existing behavior.
+
+## Epic Q — Daily tracking polish
+
+### US43 — Make timer and correction screens fit their content · P1
+
+Implementation status: **Complete** · 2026-10-02.
+This later request supersedes the wide-screen action-row layout recorded in US40.
+
+As a daily QI Flow user, I want the timer, correction editor and actions to use available space
+well, and my recorded start to reflect the configured rounding fairly.
+
+Acceptance criteria:
+
+- The session editor opens with a compact session list and correction controls that remain
+  reachable without horizontal scrolling, including when a scanned task has a long name.
+- Today's timer actions use the empty space beside the timer at wider sizes and reflow below it
+  at narrow sizes without hiding timer actions.
+- For timer-created work at 15-minute precision, an 08:06 start records 08:00, while an 08:40
+  start records 08:40. At the exact midpoint the actual start is retained; finishes still round
+  up and lunch deductions still use nearest rounding.
+- Enabled action buttons use the orange filled primary style or orange outlined alternative
+  style across light and dark themes.

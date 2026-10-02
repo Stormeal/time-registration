@@ -10,8 +10,8 @@ after its acceptance criteria pass and any required release smoke check is recor
 
 | Status | Stories | Remaining work |
 | --- | --- | --- |
-| In progress | US21 | Clean-account installer and upgrade verification; package Google sync dependencies. |
-| In progress | US32 | Updater and package staging are implemented; a published release asset and clean-install smoke test remain. |
+| In progress | US21 | Per-user installer and uninstall cleanup are implemented; clean-account install, upgrade, and uninstall verification remain. |
+| In progress | US32 | The release pipeline has published assets; this new uninstall-preservation fix still needs a packaged Windows update and rollback smoke test. |
 | In progress | US28 | Complete authorization and synchronization behavior. |
 | In progress | US29 | Completed sessions and deductions merge through the shared sheet; explicit conflict resolution and other record types remain. |
 | In progress | US30 | Live DSB smoke check and release verification. |
@@ -21,7 +21,9 @@ after its acceptance criteria pass and any required release smoke check is recor
 
 ### US21 — Install and upgrade on Windows · P2
 
-Implementation status: **In progress**.
+Implementation status: **In progress** · uninstall now removes its own optional startup entry;
+the installer retains user data and cleans app-owned runtime files. A clean-account Windows
+install, upgrade, and uninstall smoke test remains.
 
 As a consultant, I want a per-user installer so that I can run QI Flow on permitted Windows machines without administrator rights.
 
@@ -34,7 +36,9 @@ Acceptance criteria:
 
 ### US32 — Update QI Flow in place · P2
 
-Implementation status: **In progress** · manual release checks, verified download, staging, and helper-based replacement are implemented; a published update asset and Windows release smoke test remain.
+Implementation status: **In progress** · verified download, rollback, and preservation of the
+installed uninstall files are implemented. Version 0.2.9 has published assets; this new fix still
+needs a packaged Windows update and rollback smoke test before release.
 
 As a QI Flow user, I want to receive and apply verified application updates from inside the app so
 that I do not have to find, download, and run a new installer for every release.

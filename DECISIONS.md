@@ -11,8 +11,8 @@ This file records the shared understanding reached during the design interview. 
 | D001 | The application is named **QI Flow**. |
 | D002 | Iteration 1 is a local Windows application built with Python, PySide6, and SQLite. |
 | D003 | Google Sheets synchronization, cross-machine behavior, Testhuset, SAP, authentication, and workplace submission are deferred. |
-| D004 | The application installs for the current Windows user without requiring administrator rights. |
-| D005 | QI Flow has no telemetry. Verified application updates may be checked and applied from within QI Flow without requiring the user to manually download and run the installer for each release. Updates must preserve user data, require no administrator rights, and provide a safe recovery path if application-file replacement fails. The installer remains available for first installation and recovery. |
+| D004 | The application installs for the current Windows user without requiring administrator rights. Uninstall removes the optional Start with Windows entry only when it still points to that installation; user data remains. |
+| D005 | QI Flow has no telemetry. Verified application updates may be checked and applied from within QI Flow without requiring the user to manually download and run the installer for each release. Updates must preserve user data and the installed Windows uninstaller, require no administrator rights, and provide a safe recovery path if application-file replacement fails. The installer remains available for first installation and recovery. |
 
 ## Work, lunch, and time calculation
 
@@ -30,7 +30,7 @@ This file records the shared understanding reached during the design interview. 
 | ID | Confirmed decision |
 | --- | --- |
 | D020 | Rounding options are 1, 5, 10, and 15 minutes; the default is 5 minutes. Setting changes apply only to future button actions. |
-| D021 | Timer-created work sessions use outward rounding: Start work rounds down and Finish work rounds up to the configured boundary. Timer-created lunch deductions use nearest-interval rounding. Actual button-press timestamps are retained as metadata. |
+| D021 | Timer-created work starts use the previous boundary when it is closer than the next one; when the next boundary is closer or exactly tied, the actual start is kept so tracking never begins in the future. Finish work rounds up to the configured boundary. Timer-created lunch deductions use nearest-interval rounding. Actual button-press timestamps are retained as metadata. |
 | D022 | Active timers display actual elapsed time. Rounding is applied when the interval is completed. Ordinary timesheets show rounded effective values; actual timestamps are available in entry details. |
 | D023 | Manual entry accepts exact minute values without applying automatic rounding. Future-dated entries are blocked. |
 | D024 | If rounding produces an invalid or zero-length interval, show the result and require correction; do not invent duration. |
@@ -119,6 +119,10 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-10-02: Epic G updater staging now retains the installed Inno uninstall files before
+  replacing application files and refuses an installation lacking them. New installers remove the
+  optional startup value on uninstall only if it still points to the same installation, and clean
+  app-owned runtime files that an in-app update may have added.
 - 2026-09-28: User selected the Compact utility POC and supplied transparent primary and dark
   logos. D071 revises the proposed main-interface branding; D074 requires functionality parity.
   `docs/compact-design-review.md` records POC gaps and the requirements-preservation checklist.
@@ -135,6 +139,9 @@ This file records the shared understanding reached during the design interview. 
 - 2026-09-20: D021 changed from nearest rounding for every timer boundary to outward work-session
   rounding. With 15-minute rounding, 07:05 starts at 07:00 and 16:10 finishes at 16:15. Lunch
   deductions remain nearest-rounded.
+- 2026-10-02: D021 revised for timer starts. With 15-minute precision, 08:06 starts effectively
+  at 08:00, while 08:40 keeps its actual start because 08:45 is nearer than 08:30. An exact
+  midpoint also keeps its actual start. Finish and lunch rules are unchanged.
 - 2026-09-20: D103 adds a user-managed Testhuset-branch allowlist for DSB. The three currently
   identified Team Web, DSB branches can be selected, but are not hard-coded or inferred by name.
 - 2026-09-27: Epic B (US05–US08) completed. Timesheet details expose exact-version recovery,

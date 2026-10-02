@@ -118,8 +118,9 @@ class TodayPage(QWidget):
         head.addLayout(titles, 1)
         head.addWidget(self._add_entry)
         layout.addLayout(head)
-        timer_row = QHBoxLayout()
+        timer_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         timer_row.setSpacing(20)
+        self._timer_row_layout = timer_row
         timer_info = QVBoxLayout()
         for widget in (self._status, self._timer, self._session_detail, self._lunch_duration):
             timer_info.addWidget(widget)
@@ -130,8 +131,8 @@ class TodayPage(QWidget):
         for action_button in (self._start_work, self._lunch, self._finish_work, self._start_at):
             buttons.addWidget(action_button)
         buttons.addStretch(1)
+        timer_row.addLayout(buttons)
         layout.addLayout(timer_row)
-        layout.addLayout(buttons)
         layout.addWidget(self._resolve)
         summary = QHBoxLayout()
         for labels in (
@@ -301,11 +302,13 @@ class TodayPage(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        direction = (
-            QBoxLayout.Direction.LeftToRight
-            if event.size().width() >= 720
-            else QBoxLayout.Direction.TopToBottom
+        wide = event.size().width() >= 720
+        self._timer_row_layout.setDirection(
+            QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
         )
+        direction = QBoxLayout.Direction.TopToBottom
+        if not wide and event.size().width() >= 520:
+            direction = QBoxLayout.Direction.LeftToRight
         if self._action_buttons_layout.direction() != direction:
             self._action_buttons_layout.setDirection(direction)
 

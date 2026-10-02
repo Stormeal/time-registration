@@ -21,6 +21,7 @@ from qi_flow.application.dto import (
     StartWorkCommand,
 )
 from qi_flow.domain.models import DeductionKind
+from qi_flow.domain.testhuset import ProjectTask
 from qi_flow.ui.daily_note_dialog import DailyNoteDialog
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.session_editor_dialog import SessionEditorDialog
@@ -51,6 +52,30 @@ def test_session_editor_opens_at_wide_two_column_size(qtbot, rig):
     qtbot.addWidget(dialog)
 
     assert dialog.width() == 1100
+
+
+def test_session_editor_gives_correction_controls_room_without_horizontal_scroll(qtbot, rig, qapp):
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qapp.processEvents()
+
+    assert dialog._tree.width() <= 320
+    assert dialog._controls_scroll.horizontalScrollBar().maximum() == 0
+
+
+def test_session_editor_long_task_name_does_not_push_controls_offscreen(qtbot, rig, qapp):
+    class Tasks:
+        def tasks(self):
+            return (ProjectTask("task-1", "Very long customer project name " * 5, "Task"),)
+
+    dialog = SessionEditorDialog(rig.service, rig.service.today_summary().work_date, Tasks())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qapp.processEvents()
+
+    assert dialog._controls_scroll.horizontalScrollBar().maximum() == 0
+    assert dialog._save_task.geometry().right() <= dialog._controls_scroll.viewport().width()
 
 
 def test_disabled_session_editor_actions_explain_required_selection(qtbot, rig):

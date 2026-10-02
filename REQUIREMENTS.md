@@ -40,7 +40,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R17 | Closing the main window minimizes Worktime to the system tray without ending an active work or lunch interval. Exiting the application requires right-clicking the tray icon and choosing **Close app**. | Not started |
 | R18 | While lunch is active, only **End lunch** ends the lunch interval. **Finish work** is unavailable until lunch has ended. | Not started |
 | R19 | The monthly timesheet is a list grouped by calendar week number. | Not started |
-| R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Timer-created work starts round down and finishes round up; completed lunch boundaries use nearest rounding. Live timers use actual time, completed entries use rounded effective times, and manual entries accept exact minutes. | Complete |
+| R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Timer-created work starts use the previous boundary only when it is nearer than the next boundary; otherwise the actual start is kept. Work finishes round up; completed lunch boundaries use nearest rounding. Live timers use actual time, completed entries use effective times, and manual entries accept exact minutes. | Complete |
 | R21 | Detect unfinished previous-day sessions and long Windows sleep intervals, requiring the user to resolve ambiguous time before further timer actions. | Complete |
 | R22 | Support multiple lunch intervals and deducted sleep-break intervals within one continuous work session. | Complete |
 | R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Complete |
@@ -142,6 +142,12 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
   installer; this fixes Google authorization on packaged installations.
 - 2026-09-20: Timer-created work sessions use outward rounding: start rounds down and finish
   rounds up to the configured boundary. Lunch deductions retain nearest-boundary rounding.
+- 2026-10-02: Timer-created starts now use the earlier boundary only when it is the nearer one;
+  otherwise the actual start is kept. At 15-minute precision, 08:06 becomes 08:00 and 08:40
+  remains 08:40. Finishes still round up and lunches still use nearest-boundary rounding.
+- 2026-10-02: Epic G in-app updates preserve the installed Windows uninstaller. New per-user
+  installers remove their own optional Start with Windows registration on uninstall while keeping
+  user data and backups.
 - 2026-09-20: DSB hours are limited by a user-managed allowlist of scanned Testhuset branches.
   Sessions assigned to other or unresolved branches remain recorded but are excluded from DSB.
 - 2026-09-27: R30 revised at the user's request to permit verified in-app updates without a

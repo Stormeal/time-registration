@@ -19,6 +19,15 @@ def make_page(qtbot, rig):
     return page
 
 
+def test_today_actions_share_timer_row_in_wide_window(qtbot, rig, qapp):
+    page = make_page(qtbot, rig)
+    page.resize(760, 620)
+    qapp.processEvents()
+
+    assert page._start_work.geometry().left() > page._timer.geometry().right()
+    assert page._start_work.geometry().top() < page._session_detail.geometry().bottom()
+
+
 def test_compact_today_work_lunch_finish_and_undo_flow(qtbot, rig):
     page = make_page(qtbot, rig)
     assert hasattr(page, "_lunch_duration"), "Lunch duration must remain visible"
@@ -142,7 +151,7 @@ def test_failed_task_assignment_rolls_back_new_active_session(qtbot, rig, monkey
     assert rig.service.active_state().session_id is None
 
 
-def test_today_actions_use_horizontal_row_when_wide_and_stack_when_narrow(qtbot, rig, qapp):
+def test_today_actions_use_side_column_when_wide_and_row_when_narrow(qtbot, rig, qapp):
     page = make_page(qtbot, rig)
     page._start_work.click()
     page.refresh()
@@ -151,17 +160,18 @@ def test_today_actions_use_horizontal_row_when_wide_and_stack_when_narrow(qtbot,
     page.resize(760, 520)
     qapp.processEvents()
     assert page.width() == 760
-    assert len({button.geometry().center().y() for button in buttons}) == 1
-    assert [button.geometry().x() for button in buttons] == sorted(
-        button.geometry().x() for button in buttons
+    assert len({button.geometry().center().x() for button in buttons}) == 1
+    assert [button.geometry().y() for button in buttons] == sorted(
+        button.geometry().y() for button in buttons
     )
+    assert all(button.geometry().left() > page._timer.geometry().right() for button in buttons)
 
     page.resize(600, 520)
     qapp.processEvents()
     assert page.width() < 720
-    assert len({button.geometry().center().x() for button in buttons}) == 1
-    assert [button.geometry().y() for button in buttons] == sorted(
-        button.geometry().y() for button in buttons
+    assert len({button.geometry().center().y() for button in buttons}) == 1
+    assert [button.geometry().x() for button in buttons] == sorted(
+        button.geometry().x() for button in buttons
     )
 
 

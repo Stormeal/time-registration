@@ -52,8 +52,9 @@ def round_up_to_interval(value: datetime, minutes: int) -> datetime:
 def effective_work_interval(
     start: datetime, end: datetime, minutes: int
 ) -> tuple[datetime, datetime]:
-    """Round timer-created work outwards so the recorded span contains the actual span."""
-    rounded_start = round_down_to_interval(start, minutes)
+    """Use the nearer earlier start boundary or the actual start; round finish up."""
+    nearest_start = round_to_nearest_interval(start, minutes)
+    rounded_start = nearest_start if nearest_start <= start else start.astimezone(UTC)
     rounded_end = round_up_to_interval(end, minutes)
     if rounded_end <= rounded_start:
         raise InvalidIntervalError("rounding produced a zero-length interval; correct the times")

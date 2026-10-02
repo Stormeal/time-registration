@@ -44,11 +44,26 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch QI Flow"; Flags: nowait postinstall skipifsilent
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Code]
+const
+  StartupRunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  StartupCommand: String;
+  ExpectedStartupCommand: String;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    ExpectedStartupCommand := '"' + ExpandConstant('{app}\{#MyAppExeName}') + '" --start-minimized';
+    if RegQueryStringValue(HKEY_CURRENT_USER, StartupRunKey, 'QI Flow', StartupCommand) then
+    begin
+      if CompareText(StartupCommand, ExpectedStartupCommand) = 0 then
+        RegDeleteValue(HKEY_CURRENT_USER, StartupRunKey, 'QI Flow');
+    end;
     MsgBox(
       'QI Flow was removed. Your time records, settings, backups, and logs remain in your private Windows application-data folder.',
       mbInformation,

@@ -83,14 +83,15 @@ class ThemeManager(QObject):
             QLabel[role="heading"] {{ font-size: 22px; font-weight: 600; }}
             QLabel#netTimer {{ font-size: 40px; font-weight: 600; }}
             QLabel[role="total"] {{ font-size: 20px; font-weight: 600; }}
-            QPushButton {{ background: {surface}; border: 1px solid {line}; border-radius: 5px;
+            QPushButton {{ background: {surface}; border: 1px solid #e98517; border-radius: 5px;
                 padding: 7px 12px; min-height: 20px; }}
-            QPushButton:hover {{ border-color: {muted}; }}
+            QPushButton:hover {{ background: {selected}; border-color: #f48f21; }}
             QPushButton:focus {{ border: 2px solid #b66100; padding: 6px 11px; }}
             QPushButton[role="primary"] {{ background: #f48f21; color: #261c0e;
                 border-color: #f48f21; font-weight: 600; }}
+            QPushButton[role="primary"]:hover {{ background: #ffa23e; }}
             QPushButton[role="primary"]:focus {{ border-color: #753900; }}
-            QPushButton:disabled {{ background: {bg}; color: {muted}; border-color: {line}; }}
+            QPushButton:disabled {{ background: {bg}; color: {muted}; border-color: #a56628; }}
             QLineEdit, QTextEdit, QSpinBox, QComboBox, QDateEdit, QTimeEdit {{
                 background: {surface}; border: 1px solid {line}; border-radius: 4px;
                 padding: 5px; min-height: 22px; selection-background-color: {selected}; }}

@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import hashlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -15,6 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 _MAX_ARCHIVE_BYTES = 1_000_000_000
+_UNINSTALL_FILE = re.compile(r"unins(\d{3})\.(exe|dat|msg)", re.IGNORECASE)
 
 
 def _verify_archive(archive: Path, expected_sha256: str) -> None:
@@ -93,9 +95,23 @@ def apply_update(archive: Path, install_dir: Path, expected_sha256: str) -> None
         raise ValueError("A previous update recovery folder already exists.")
 
     _verify_archive(archive, expected_sha256)
+    uninstall_files: list[Path] = []
+    uninstall_parts: dict[str, set[str]] = {}
+    for path in install_dir.iterdir():
+        match = _UNINSTALL_FILE.fullmatch(path.name)
+        if path.is_file() and match is not None:
+            uninstall_files.append(path)
+            uninstall_parts.setdefault(match.group(1), set()).add(match.group(2).lower())
+    if not any({"exe", "dat"} <= parts for parts in uninstall_parts.values()):
+        raise ValueError(
+            "The QI Flow uninstall files are missing. Reinstall QI Flow before updating."
+        )
+
     staging = Path(tempfile.mkdtemp(prefix=".qi-flow-update-", dir=parent))
     try:
         bundle = _extract_bundle(archive, staging)
+        for path in uninstall_files:
+            shutil.copy2(path, bundle / path.name)
         install_dir.replace(backup)
         try:
             bundle.replace(install_dir)

@@ -185,6 +185,22 @@ def test_timer_work_rounds_start_down_and_finish_up(tmp_path: Path) -> None:
     assert session.effective_ended_at == datetime(2026, 9, 15, 16, 15, tzinfo=UTC)
 
 
+def test_timer_start_nearer_next_boundary_persists_actual_start(tmp_path: Path) -> None:
+    start = datetime(2026, 10, 2, 6, 40, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.set_rounding_minutes(15)
+    service.start_work(StartWorkCommand())
+    clock.value = datetime(2026, 10, 2, 7, 0, tzinfo=UTC)
+
+    service.finish_work(FinishWorkCommand())
+
+    with SQLiteUnitOfWork(database) as uow:
+        session = uow.sessions.get(SessionId("session-1"))
+    assert session is not None
+    assert session.effective_started_at == start
+    assert session.effective_ended_at == clock.value
+
+
 def test_start_and_finish_timer_actions_can_be_undone_for_30_seconds(tmp_path: Path) -> None:
     at = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
     service, clock, _ = build_service(tmp_path, at)

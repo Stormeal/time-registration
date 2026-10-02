@@ -41,7 +41,7 @@ class ManualEntryDialog(QDialog):
         self._kind = QComboBox()
         self._kind.addItem("Work session", "work")
         self._kind.addItem("Lunch", DeductionKind.LUNCH.value)
-        self._kind.addItem("Sleep break", DeductionKind.SLEEP_BREAK.value)
+        self._kind.addItem("Break", DeductionKind.SLEEP_BREAK.value)
         self._parent = QComboBox()
         initial = work_date or datetime.now(COPENHAGEN).date()
         current_time = datetime.now(COPENHAGEN).time().replace(second=0, microsecond=0)

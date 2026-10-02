@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt, QTime
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtWidgets import QMessageBox, QScrollArea
+from PySide6.QtWidgets import QDialogButtonBox, QMessageBox, QScrollArea
 
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
@@ -176,6 +176,25 @@ def test_manual_entry_uses_one_date_and_time_only_inputs(qtbot, tmp_path) -> Non
     assert dialog._as_copenhagen(dialog._date.date(), QTime(7, 30)) == datetime(
         2026, 9, 14, 7, 30, tzinfo=COPENHAGEN
     )
+
+
+def test_manual_break_label_still_creates_break_deduction(qtbot, tmp_path) -> None:
+    _, tracking, session, _ = build(tmp_path)
+    dialog = ManualEntryDialog(tracking, date(2026, 9, 14))
+    qtbot.addWidget(dialog)
+
+    break_index = dialog._kind.findText("Break")
+    assert break_index >= 0
+    dialog._kind.setCurrentIndex(break_index)
+    dialog._start.setTime(QTime(12, 0))
+    dialog._end.setTime(QTime(12, 15))
+    save = dialog._buttons.button(QDialogButtonBox.StandardButton.Save)
+    assert save is not None
+    qtbot.mouseClick(save, Qt.MouseButton.LeftButton)
+
+    deductions = tracking.completed_deductions(session.id)
+    assert len(deductions) == 1
+    assert deductions[0].kind is DeductionKind.SLEEP_BREAK
 
 
 def test_session_editor_uses_the_selected_day_and_time_only_inputs(qtbot, tmp_path) -> None:

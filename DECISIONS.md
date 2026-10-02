@@ -119,6 +119,10 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-10-03: The user confirmed that every differing Testhuset and DSB row requires an explicit
+  Keep or Replace choice before Fill is enabled. D097 and D102 take precedence over archived
+  US27's default-to-Replace interaction. US45 records the revised interaction and tests; the
+  archived story remains unchanged as historical documentation.
 - 2026-10-02: Epic G updater staging now retains the installed Inno uninstall files before
   replacing application files and refuses an installation lacking them. New installers remove the
   optional startup value on uninstall only if it still points to the same installation, and clean

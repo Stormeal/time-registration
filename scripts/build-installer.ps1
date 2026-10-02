@@ -1,12 +1,14 @@
 param(
     [switch]$InstallDependencies,
     [string]$Version = "",
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$PythonPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$python = if ($PythonPath) { [System.IO.Path]::GetFullPath($PythonPath) } else { Join-Path $projectRoot ".venv\Scripts\python.exe" }
+$env:PYTHONPATH = Join-Path $projectRoot "src"
 
 if (-not (Test-Path $python)) {
     throw "Create the project's virtual environment first: py -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e '.[dev]'"
@@ -111,16 +113,16 @@ try {
         throw "Host-injected runtime DLLs could not be filtered from the application bundle."
     }
     & $python -m PyInstaller --noconfirm --clean --onefile --windowed `
-        --distpath $artifactRoot --workpath (Join-Path $workRoot "updater") --specpath $workRoot `
-        --name "QI Flow Updater" scripts/update_helper.py
+        --distpath $artifactRoot --workpath (Join-Path $workRoot "launcher") --specpath $workRoot `
+        --paths $projectRoot --icon (Join-Path $projectRoot "src\qi_flow\assets\qiflow-icon.ico") `
+        --name "QI Flow Launcher" scripts/qi_flow_launcher.py
     if ($LASTEXITCODE -ne 0) {
-        throw "The QI Flow updater helper build failed with exit code $LASTEXITCODE."
+        throw "The QI Flow launcher build failed with exit code $LASTEXITCODE."
     }
-    Copy-Item -LiteralPath (Join-Path $artifactRoot "QI Flow Updater.exe") `
-        -Destination (Join-Path $bundle "QI Flow Updater.exe")
     $requiredBundleFiles = @(
         (Join-Path $bundle "QI Flow.exe"),
-        (Join-Path $bundle "_internal\base_library.zip")
+        (Join-Path $bundle "_internal\base_library.zip"),
+        (Join-Path $artifactRoot "QI Flow Launcher.exe")
     )
     foreach ($file in $requiredBundleFiles) {
         if (-not (Test-Path $file)) {
@@ -156,6 +158,7 @@ if (-not $iscc) {
 
 $installerOutput = Join-Path $artifactRoot "installer"
 & $iscc "/DMyAppVersion=$projectVersion" "/DMyAppBundleDir=$bundle" `
+    "/DMyAppLauncher=$artifactRoot\QI Flow Launcher.exe" `
     "/DMyAppOutputDir=$installerOutput" "installer\QIFlow.iss"
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE."

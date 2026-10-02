@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 import argparse
+import sys
 import zipfile
 from pathlib import Path
 
@@ -16,9 +16,9 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parents[1]
     output_dir = (args.output_dir or root / "dist").resolve()
     bundle = (args.bundle_dir or output_dir / "QI Flow").resolve()
-    if not (bundle / "QI Flow.exe").is_file() or not (bundle / "QI Flow Updater.exe").is_file():
-        raise SystemExit("Build QI Flow and QI Flow Updater before creating the update package.")
-    destination = output_dir / "QI-Flow-Update.zip"
+    if not (bundle / "QI Flow.exe").is_file():
+        raise SystemExit("Build QI Flow before creating the update package.")
+    destination = output_dir / "QI-Flow-Update-v2.zip"
     output_dir.mkdir(parents=True, exist_ok=True)
     destination.unlink(missing_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as package:

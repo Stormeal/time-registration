@@ -27,7 +27,11 @@ def newer_version() -> str:
     return f"v{major}.{minor}.{int(patch) + 1}"
 
 
-def release_payload(version: str | None = None, digest: str | None = None) -> bytes:
+def release_payload(
+    version: str | None = None,
+    digest: str | None = None,
+    asset_name: str = "QI-Flow-Update-v2.zip",
+) -> bytes:
     if version is None:
         version = newer_version()
     return json.dumps(
@@ -37,10 +41,10 @@ def release_payload(version: str | None = None, digest: str | None = None) -> by
             "prerelease": False,
             "assets": [
                 {
-                    "name": "QI-Flow-Update.zip",
+                    "name": asset_name,
                     "browser_download_url": (
                         "https://github.com/Stormeal/time-registration/releases/download/"
-                        f"{version}/QI-Flow-Update.zip"
+                        f"{version}/{asset_name}"
                     ),
                     "digest": f"sha256:{digest or 'a' * 64}",
                     "size": 5,
@@ -58,6 +62,26 @@ def test_release_check_finds_only_new_stable_versions() -> None:
     assert update is not None
     assert update.version == newer_version()
     assert update.sha256 == "a" * 64
+
+
+def test_release_check_rejects_legacy_update_asset() -> None:
+    client = ReleaseClient(
+        lambda *_args, **_kwargs: Response(release_payload(asset_name="QI-Flow-Update.zip"))
+    )
+
+    with pytest.raises(UpdateError, match="valid update package"):
+        client.check()
+
+
+def test_release_check_rejects_v2_label_on_legacy_download_url() -> None:
+    payload = json.loads(release_payload())
+    payload["assets"][0]["browser_download_url"] = payload["assets"][0][
+        "browser_download_url"
+    ].replace("QI-Flow-Update-v2.zip", "QI-Flow-Update.zip")
+    client = ReleaseClient(lambda *_args, **_kwargs: Response(json.dumps(payload).encode()))
+
+    with pytest.raises(UpdateError, match="integrity metadata"):
+        client.check()
 
 
 @pytest.mark.parametrize("version", [f"v{__version__}", "v0.0.0"])

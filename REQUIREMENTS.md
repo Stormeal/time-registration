@@ -147,6 +147,10 @@ Payroll/invoice/bonus calculation, automatic activity surveillance, automatic id
 - 2026-09-27: R30 revised at the user's request to permit verified in-app updates without a
   manual installer download/run for each release. No telemetry remains in scope; Epic G US32
   defines the updater acceptance criteria.
+- 2026-10-02: The user verified the existing latest-release check and ordinary in-app update.
+  The stable-launcher recovery and v2 asset migration are implemented; R30 remains in progress
+  until the clean-account installer, failure recovery, uninstall, and database compatibility
+  checks in `docs/epic-g-release-smoke.md` are observed on the release candidate.
 - 2026-09-20: Google sync reads and merges the structured tab before writing it. A fresh machine
   imports completed work sessions and deductions rather than clearing remote history; divergent
   records at the same revision stop synchronization instead of being silently overwritten.

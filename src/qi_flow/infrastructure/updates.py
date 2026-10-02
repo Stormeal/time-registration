@@ -16,7 +16,7 @@ from typing import Any
 from qi_flow import __version__
 
 _RELEASE_URL = "https://api.github.com/repos/Stormeal/time-registration/releases/latest"
-_ASSET_NAME = "QI-Flow-Update.zip"
+_ASSET_NAME = "QI-Flow-Update-v2.zip"
 _ASSET_PREFIX = "https://github.com/Stormeal/time-registration/releases/download/"
 _MAX_PACKAGE_BYTES = 1_000_000_000
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -88,7 +88,7 @@ class ReleaseClient:
             size = asset.get("size")
             if (
                 not isinstance(url, str)
-                or not url.startswith(_ASSET_PREFIX)
+                or url != f"{_ASSET_PREFIX}{version}/{_ASSET_NAME}"
                 or not isinstance(digest, str)
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
                 or isinstance(size, bool)

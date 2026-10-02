@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from functools import partial
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QProcess
+from PySide6.QtCore import QCoreApplication, QProcess, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
@@ -57,6 +58,47 @@ def _guard_key(data_dir: Path) -> str:
     return hashlib.sha1(str(data_dir).encode("utf-8")).hexdigest()[:16]
 
 
+def extract_update_ready_args(arguments: list[str]) -> tuple[list[str], str | None]:
+    """Keep the private updater handshake out of Qt's argument parser."""
+    args = list(arguments)
+    if "--update-ready" not in args:
+        return args, None
+    index = args.index("--update-ready")
+    if index + 1 >= len(args) or args.count("--update-ready") != 1:
+        raise ValueError("Invalid update readiness token.")
+    token = args[index + 1]
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise ValueError("Invalid update readiness token.")
+    return args[:index] + args[index + 2 :], token
+
+
+def _signal_update_ready(token: str) -> None:
+    executable = Path(sys.executable).resolve()
+    if not getattr(sys, "frozen", False) or executable.parent.name.casefold() != "current":
+        return
+    root = executable.parent.parent
+    if not (root / "QI Flow Launcher.exe").is_file():
+        return
+    marker = root / "update-work" / f"ready-{token}"
+    marker.parent.mkdir(exist_ok=True)
+    marker.write_text(token, encoding="ascii")
+
+
+def _restart_after_restore(update_token: str | None) -> bool:
+    """A provisional update must fail its trial instead of spawning an untracked app."""
+    if update_token is not None:
+        return False
+    executable = Path(sys.executable).resolve()
+    if getattr(sys, "frozen", False) and executable.parent.name.casefold() == "current":
+        root = executable.parent.parent
+        launcher = root / "QI Flow Launcher.exe"
+        if launcher.is_file():
+            QProcess.startDetached(str(launcher), sys.argv[1:], str(root))
+            return True
+    QProcess.startDetached(sys.executable, sys.argv[1:])
+    return True
+
+
 def build_runtime(data_root: Path | None = None) -> RuntimeContext:
     """Prepare local infrastructure without constructing widgets."""
     paths = _resolve_paths(data_root)
@@ -73,7 +115,7 @@ def run(argv: list[str] | None = None) -> int:
     QCoreApplication.setApplicationName("QI Flow")
     QCoreApplication.setApplicationVersion(__version__)
 
-    args = list(argv if argv is not None else sys.argv)
+    args, update_token = extract_update_ready_args(list(argv if argv is not None else sys.argv))
     start_minimized = START_MINIMIZED_FLAG in args
     args = [value for value in args if value != START_MINIMIZED_FLAG]
 
@@ -118,9 +160,9 @@ def run(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Restore failed", str(restore_error))
             guard.release()
             return 1
-        QProcess.startDetached(sys.executable, sys.argv[1:])
         guard.release()
-        return 0
+        restarted = _restart_after_restore(update_token)
+        return 0 if restarted else 1
     log.info("QI Flow %s started; data directory initialized", __version__)
 
     service = TimeTrackingApplicationService(
@@ -175,7 +217,6 @@ def run(argv: list[str] | None = None) -> int:
         tray.open_timesheet_requested.connect(window.show_timesheet)
         tray.settings_requested.connect(window.show_settings)
         tray.close_app_requested.connect(exit_coordinator.request_exit)
-        tray.show()
     else:
         tray = None
         app.setQuitOnLastWindowClosed(True)
@@ -187,16 +228,27 @@ def run(argv: list[str] | None = None) -> int:
     show_window = (
         tray is None or not start_minimized or service.recovery_state() is not None or first_setup
     )
-    if show_window:
-        window.show()
-    if first_setup:
-        window.show_settings()
-        QMessageBox.information(
-            window,
-            "Welcome to QI Flow",
-            "Review the defaults in Settings, then choose Save application settings to finish "
-            "setup.",
-        )
+
+    def finish_startup() -> None:
+        if update_token is not None:
+            _signal_update_ready(update_token)
+        if tray is not None:
+            tray.show()
+        if show_window:
+            window.show()
+        if first_setup:
+            window.show_settings()
+            QMessageBox.information(
+                window,
+                "Welcome to QI Flow",
+                "Review the defaults in Settings, then choose Save application settings to finish "
+                "setup.",
+            )
+
+    if update_token is None:
+        finish_startup()
+    else:
+        QTimer.singleShot(0, finish_startup)
     exit_code = app.exec()
     if tray is not None:
         tray.hide()

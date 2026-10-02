@@ -30,7 +30,10 @@ def test_installer_build_refuses_incomplete_bundle_and_runs_smoke_check() -> Non
     assert "_internal\\base_library.zip" in script
     assert "scripts/filter_host_runtime_dlls.py" in script
     assert '"QI Flow.exe") --smoke-check' in script
-    assert '--name "QI Flow Updater" scripts/update_helper.py' in script
+    assert '--name "QI Flow Launcher" scripts/qi_flow_launcher.py' in script
+    assert "--paths $projectRoot --icon (Join-Path $projectRoot " in script
+    assert '"src\\qi_flow\\assets\\qiflow-icon.ico")' in script
+    assert 'Copy-Item -LiteralPath (Join-Path $artifactRoot "QI Flow Launcher.exe")' not in script
     assert "scripts/build-update-package.py" in script
 
 
@@ -76,7 +79,7 @@ def test_update_package_contains_application_bundle_with_expected_layout(tmp_pat
     bundle = root / "dist" / "QI Flow"
     bundle.mkdir(parents=True)
     (bundle / "QI Flow.exe").write_bytes(b"app")
-    (bundle / "QI Flow Updater.exe").write_bytes(b"helper")
+    (root / "dist" / "QI Flow Launcher.exe").write_bytes(b"launcher")
     (root / "scripts").mkdir()
     script_path = Path("scripts/build-update-package.py")
     script = script_path.read_text(encoding="utf-8")
@@ -86,11 +89,18 @@ def test_update_package_contains_application_bundle_with_expected_layout(tmp_pat
 
     namespace["main"]([])
 
-    with zipfile.ZipFile(root / "dist" / "QI-Flow-Update.zip") as package:
-        assert set(package.namelist()) == {
-            "QI Flow/QI Flow.exe",
-            "QI Flow/QI Flow Updater.exe",
-        }
+    with zipfile.ZipFile(root / "dist" / "QI-Flow-Update-v2.zip") as package:
+        assert set(package.namelist()) == {"QI Flow/QI Flow.exe"}
+    assert not (root / "dist" / "QI-Flow-Update.zip").exists()
+
+
+def test_prerelease_workflow_publishes_only_v2_update_asset() -> None:
+    workflow = Path(".github/workflows/prerelease.yml").read_text(encoding="utf-8")
+    assert "dist/QI-Flow-Update-v2.zip" in workflow
+    assert "release-assets/QI-Flow-Update-v2.zip" in workflow
+    assert "dist/QI-Flow-Update.zip" not in workflow
+    assert '"release-assets/QI-Flow-Update.zip"' not in workflow
+    assert '--notes "$MIGRATION_NOTE"' in workflow
 
 
 def test_installer_is_per_user_and_leaves_application_data_on_uninstall() -> None:
@@ -101,3 +111,39 @@ def test_installer_is_per_user_and_leaves_application_data_on_uninstall() -> Non
     assert "{#MyAppBundleDir}" in installer
     assert "{#MyAppOutputDir}" in installer
     assert "remain in your private Windows application-data folder" in installer
+
+
+def test_installer_keeps_launcher_and_uninstaller_outside_replaceable_bundle() -> None:
+    installer = Path("installer/QIFlow.iss").read_text(encoding="utf-8")
+
+    assert 'DestDir: "{app}\\current"' in installer
+    assert 'DestDir: "{app}"' in installer
+    assert 'Filename: "{app}\\{#MyLauncherExeName}"' in installer
+    assert "UninstallDisplayIcon={app}\\{#MyLauncherExeName}" in installer
+    assert 'Name: "{app}\\current"; Type: filesandordirs' in installer
+    assert 'Name: "{app}\\update-work"; Type: filesandordirs' in installer
+    assert "QI Flow.previous" in installer
+    assert "[InstallDelete]" in installer
+    assert 'Name: "{app}\\current"; Type: filesandordirs' in installer.split("[InstallDelete]")[1]
+    assert (
+        'Name: "{app}\\update-work"; Type: filesandordirs' in installer.split("[InstallDelete]")[1]
+    )
+    assert (
+        'Name: "{app}\\update-transaction.json"; Type: files'
+        in installer.split("[InstallDelete]")[1]
+    )
+
+
+def test_installer_migrates_only_its_own_startup_entry() -> None:
+    installer = Path("installer/QIFlow.iss").read_text(encoding="utf-8")
+
+    assert "RegQueryStringValue(HKCU, RunKey, 'QI Flow'" in installer
+    assert "RegWriteStringValue(HKCU, RunKey, 'QI Flow'" in installer
+    assert "RegDeleteValue(HKCU, RunKey, 'QI Flow'" in installer
+    assert "LegacyStartupCommand" in installer
+    assert "LauncherStartupCommand" in installer
+    assert "RegisterExtraCloseApplicationsResources" in installer
+    assert (
+        "RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\QI Flow.exe'))"
+        in installer
+    )

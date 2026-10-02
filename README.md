@@ -78,7 +78,15 @@ the per-user installer and in-app updater package, and publishes a GitHub prerel
 `QI Flow v<version>` with tag `v<version>`. Download these assets from the release:
 
 - `QI-Flow-Setup-<version>.exe`
-- `QI-Flow-Update.zip`
+- `QI-Flow-Update-v2.zip`
+
+Existing installations that still launch `QI Flow.exe` directly from the installation root
+must run the new per-user installer once. It moves the application bundle into `current` and
+installs a stable launcher; your time records, settings, and backups in AppData are retained.
+The old updater looks only for `QI-Flow-Update.zip`, which this and later releases do not
+publish. If an older app says the release has no valid update package, download and run the
+installer to migrate. After that, in-app updates use the v2 package. The same installer can
+repair an installation if an update cannot recover automatically.
 
 The selected version is stamped only into the build; the workflow does not commit version changes
 to the repository. QI Flow ignores prereleases when checking for updates. After reviewing and
@@ -109,7 +117,7 @@ manual; the workflow only creates prereleases when you run it.
 - Functional user stories: US01–US04 and US09–US20 implemented and verified.
 - Packaging: `scripts/build-installer.ps1` produces a per-user Windows installer. A clean-account
   installation verification remains before release.
-- The same installer build creates `dist/QI-Flow-Update.zip`; the manual prerelease workflow
+- The same installer build creates `dist/QI-Flow-Update-v2.zip`; the manual prerelease workflow
   attaches it under that exact asset name. QI Flow checks the latest stable release on user request
   and applies an update only after confirmation and SHA-256 verification. No user data or
   credentials are uploaded.

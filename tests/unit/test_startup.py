@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from qi_flow.infrastructure import startup as startup_module
@@ -84,6 +86,19 @@ def test_disabling_removes_the_value_and_is_idempotent(fake_registry: FakeWinReg
 def test_default_command_requests_a_minimized_start() -> None:
     manager = WindowsStartupManager()
     assert manager.command.endswith(START_MINIMIZED_FLAG)
+
+
+def test_frozen_bundle_registers_stable_outer_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(startup_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        startup_module.sys,
+        "executable",
+        str(Path("C:/Users/test/AppData/Local/Programs/QI Flow/current/QI Flow.exe")),
+    )
+    assert WindowsStartupManager().command == (
+        '"C:\\Users\\test\\AppData\\Local\\Programs\\QI Flow\\QI Flow Launcher.exe" '
+        "--start-minimized"
+    )
 
 
 def test_registry_unavailable_raises_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:

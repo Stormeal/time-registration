@@ -720,3 +720,21 @@ Acceptance criteria:
 Verification: `scripts/check.ps1` passes 237 tests, Ruff formatting and lint, and strict mypy.
 Qt interaction tests cover category navigation, one button per group, preference saving, backup
 location, export selection, Google authorization, update progress, and narrow-window scrolling.
+
+## Epic P — Assign EazyProject task when starting work
+
+### US42 — Choose a task for each new work session · P1
+
+Implementation status: **Complete** · 2026-10-02.
+
+As a consultant, I want to choose the EazyProject project/task when I start work so that each
+session is attributed to the branch where that work began.
+
+Acceptance criteria:
+
+- When cached EazyProject tasks are available, **Start work** opens a compact task dropdown.
+- The dropdown preselects the Settings default task. A different choice applies only to the new
+  work session and does not change the saved default.
+- Canceling the prompt leaves work stopped.
+- The selected task is persisted with the active session before the UI reports that work started.
+- If no tasks have been scanned, **Start work** keeps its existing behavior.

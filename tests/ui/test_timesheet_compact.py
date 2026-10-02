@@ -3,9 +3,11 @@
 from datetime import UTC, datetime
 
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import QApplication
 
 from qi_flow.application.dto import ManualWorkSessionCommand
 from qi_flow.domain.models import IsoWeek
+from qi_flow.ui.theme import ThemeManager
 from qi_flow.ui.timesheet_page import TimesheetPage
 
 
@@ -76,6 +78,7 @@ def test_disabled_timesheet_actions_explain_required_selection(qtbot, rig):
 
 
 def test_weekly_target_up_and_down_buttons_update_selected_iso_week(qtbot, rig):
+    ThemeManager(QApplication.instance()).apply("light")
     page = make_page(qtbot, rig)
     page._tree.setCurrentItem(day_item(page, 28))
     starting_target = page._target_hours.value()

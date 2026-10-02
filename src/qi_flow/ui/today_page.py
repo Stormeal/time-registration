@@ -310,10 +310,46 @@ class TodayPage(QWidget):
             self._action_buttons_layout.setDirection(direction)
 
     def _start(self) -> None:
+        task_id = None
+        if self._testhuset is not None:
+            tasks = self._testhuset.tasks()
+            if tasks:
+                labels = [task.label for task in tasks]
+                for index, label in enumerate(labels):
+                    if labels.count(label) > 1:
+                        labels[index] = f"{label} ({tasks[index].id})"
+                default_id = self._testhuset.default_task_id()
+                current = next(
+                    (index for index, task in enumerate(tasks) if task.id == default_id), 0
+                )
+                selected, accepted = QInputDialog.getItem(
+                    self,
+                    "Choose EazyProject task",
+                    "Project / task for this work session:",
+                    labels,
+                    current,
+                    False,
+                )
+                if not accepted:
+                    return
+                try:
+                    task_id = tasks[labels.index(selected)].id
+                except ValueError:
+                    return
         self._run(
-            lambda: self._service.start_work(StartWorkCommand()),
+            lambda: self._start_with_task(task_id),
             "Work started · Undo is available for 30 seconds.",
         )
+
+    def _start_with_task(self, task_id: str | None) -> None:
+        state = self._service.start_work(StartWorkCommand())
+        if task_id is None or state.session_id is None or self._testhuset is None:
+            return
+        try:
+            self._testhuset.assign_active(state.session_id, task_id)
+        except Exception:
+            self._service.undo_last_timer_action()
+            raise
 
     def _toggle_lunch(self) -> None:
         if self._service.active_state().active_deduction_kind is None:
@@ -463,7 +499,7 @@ class TodayPage(QWidget):
     def _run(self, action: Callable[[], object], success: str = "") -> None:
         try:
             action()
-        except DomainError as error:
+        except (DomainError, ValueError) as error:
             QMessageBox.warning(self, "QI Flow", str(error))
         else:
             self._feedback.setText(success)

@@ -96,6 +96,10 @@ class ThemeManager(QObject):
                 padding: 5px; min-height: 22px; selection-background-color: {selected}; }}
             QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QComboBox:focus,
             QDateEdit:focus, QTimeEdit:focus {{ border-color: #b66100; }}
+            QSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right;
+                width: 20px; height: 14px; border-left: 1px solid {line}; }}
+            QSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right;
+                width: 20px; height: 14px; border-left: 1px solid {line}; }}
             QGroupBox {{ border: 1px solid {line}; border-radius: 5px;
                 margin-top: 18px; padding: 18px 12px 12px; font-weight: 600; }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; }}

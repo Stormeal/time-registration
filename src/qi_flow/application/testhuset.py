@@ -9,7 +9,7 @@ from typing import Protocol
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.domain.models import IsoWeek, SessionId
+from qi_flow.domain.models import IsoWeek, SessionId, WorkSession
 from qi_flow.domain.testhuset import ProjectTask, decimal_hours, parse_hours
 from qi_flow.domain.time_rules import COPENHAGEN, split_at_local_midnight
 
@@ -117,21 +117,33 @@ class TesthusetService:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise ValueError("Choose a completed work session before assigning a task.")
-            if getattr(session, self._assignment_attribute) == task_id:
-                return
-            now = self._clock.now()
-            uow.audit.record(
-                self._identifiers.audit_id(),
-                "work_session",
-                str(session.id),
-                "update",
-                TimeTrackingApplicationService._session_snapshot(session),
-                now,
-            )
-            setattr(session, self._assignment_attribute, task_id)
-            session.updated_at = now
-            session.revision += 1
-            uow.sessions.save(session)
+            self._save_assignment(uow, session, task_id)
+
+    def assign_active(self, session_id: SessionId, task_id: str) -> None:
+        """Save a selected task on the currently running work session."""
+        self._require_task(task_id)
+        with self._uow_factory() as uow:
+            session = uow.sessions.get(session_id)
+            if session is None or session.deleted_at is not None or not session.is_active:
+                raise ValueError("Choose the active work session before assigning a task.")
+            self._save_assignment(uow, session, task_id)
+
+    def _save_assignment(self, uow: UnitOfWork, session: WorkSession, task_id: str | None) -> None:
+        if getattr(session, self._assignment_attribute) == task_id:
+            return
+        now = self._clock.now()
+        uow.audit.record(
+            self._identifiers.audit_id(),
+            "work_session",
+            str(session.id),
+            "update",
+            TimeTrackingApplicationService._session_snapshot(session),
+            now,
+        )
+        setattr(session, self._assignment_attribute, task_id)
+        session.updated_at = now
+        session.revision += 1
+        uow.sessions.save(session)
 
     def _require_task(self, task_id: str) -> None:
         if task_id not in {task.id for task in self.tasks()}:

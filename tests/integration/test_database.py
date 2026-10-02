@@ -33,7 +33,26 @@ def test_initialize_applies_initial_schema(tmp_path: Path) -> None:
         "settings",
         "audit_entries",
     } <= tables
-    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5]
+    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6]
+
+
+def test_legacy_default_weekly_target_is_migrated_to_37_hours(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")
+    database.initialize()
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO settings(key, value_json, updated_at_utc) VALUES (?, ?, ?)",
+            ("default_weekly_target_minutes", "2100", "2026-09-15T00:00:00+00:00"),
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE version=6")
+
+    database.initialize()
+
+    with closing(database.connect()) as connection:
+        row = connection.execute(
+            "SELECT value_json FROM settings WHERE key='default_weekly_target_minutes'"
+        ).fetchone()
+    assert row["value_json"] == "2220"
 
 
 def test_transaction_rolls_back_on_failure(tmp_path: Path) -> None:

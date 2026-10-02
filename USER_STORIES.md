@@ -151,3 +151,5 @@ Acceptance criteria:
 - US21 and US28–US32 remain in progress or not started as shown above.
 - US35–US40 (Epics M and N) are complete and archived in `USER_STORIES_ARCHIVE.md`.
 - US41 (Epic O, Settings clarity) is complete and archived in `USER_STORIES_ARCHIVE.md`.
+- US42 (Epic P, EazyProject assignment on start) is complete and archived in
+  `USER_STORIES_ARCHIVE.md`.

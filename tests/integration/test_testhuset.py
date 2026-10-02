@@ -122,6 +122,18 @@ def test_assignment_persists_and_can_be_restored_without_changing_times(setup) -
     assert service.proposed_slots(WEEK)[0].task == TASK
 
 
+def test_starting_session_can_persist_its_selected_task_while_active(setup) -> None:
+    tracking, service, _, database, _ = setup
+    active = tracking.start_work(StartWorkCommand())
+
+    service.assign_active(active.session_id, OTHER.id)
+
+    with SQLiteUnitOfWork(database) as uow:
+        saved = uow.sessions.get(active.session_id)
+        assert saved is not None and saved.is_active
+        assert saved.testhuset_task_id == OTHER.id
+
+
 def test_net_time_is_aggregated_per_task_before_decimal_rounding(setup) -> None:
     tracking, service, _, _, _ = setup
     session = tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))

@@ -2,10 +2,11 @@
 
 from datetime import timedelta
 
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from qi_flow.application.dto import StartWorkCommand, UpdateDayDetailsCommand
 from qi_flow.domain.models import WorkLocation
+from qi_flow.domain.testhuset import ProjectTask
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.today_page import TodayPage
 
@@ -38,6 +39,107 @@ def test_compact_today_work_lunch_finish_and_undo_flow(qtbot, rig):
     page._finish_work.click()
     assert rig.service.active_state().session_id is None
     assert page._day_total.text() == "02:30"
+
+
+def test_start_prompts_with_default_task_and_assigns_choice_to_new_session(qtbot, rig, monkeypatch):
+    class Testhuset:
+        def __init__(self):
+            self.assigned = []
+
+        def tasks(self):
+            return (
+                ProjectTask("11-22", "Project", "Default"),
+                ProjectTask("33-44", "Other", "Task"),
+            )
+
+        def default_task_id(self):
+            return "11-22"
+
+        def assign_active(self, session_id, task_id):
+            self.assigned.append((session_id, task_id))
+
+    assignment = Testhuset()
+    prompt = []
+
+    def choose_item(_parent, title, label, items, current, editable):
+        prompt.append((title, label, items, current, editable))
+        return items[1], True
+
+    monkeypatch.setattr(QInputDialog, "getItem", choose_item)
+    page = make_page(qtbot, rig)
+    page._testhuset = assignment
+
+    page._start_work.click()
+
+    assert prompt == [
+        (
+            "Choose EazyProject task",
+            "Project / task for this work session:",
+            ["Project / Default", "Other / Task"],
+            0,
+            False,
+        )
+    ]
+    state = rig.service.active_state()
+    assert state.session_id is not None
+    assert assignment.assigned == [(state.session_id, "33-44")]
+    assert assignment.default_task_id() == "11-22"
+
+
+def test_canceling_task_prompt_does_not_start_work(qtbot, rig, monkeypatch):
+    class Testhuset:
+        def tasks(self):
+            return (ProjectTask("11-22", "Project", "Default"),)
+
+        def default_task_id(self):
+            return "11-22"
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: ("", False))
+    page = make_page(qtbot, rig)
+    page._testhuset = Testhuset()
+
+    page._start_work.click()
+
+    assert rig.service.active_state().session_id is None
+
+
+def test_start_without_scanned_tasks_keeps_existing_start_behavior(qtbot, rig, monkeypatch):
+    class Testhuset:
+        def tasks(self):
+            return ()
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        lambda *args: (_ for _ in ()).throw(AssertionError("No task choices to show")),
+    )
+    page = make_page(qtbot, rig)
+    page._testhuset = Testhuset()
+
+    page._start_work.click()
+
+    assert rig.service.active_state().session_id is not None
+
+
+def test_failed_task_assignment_rolls_back_new_active_session(qtbot, rig, monkeypatch):
+    class Testhuset:
+        def tasks(self):
+            return (ProjectTask("11-22", "Project", "Default"),)
+
+        def default_task_id(self):
+            return "11-22"
+
+        def assign_active(self, _session_id, _task_id):
+            raise ValueError("Task list changed. Scan EazyProject again.")
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: ("Project / Default", True))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    page = make_page(qtbot, rig)
+    page._testhuset = Testhuset()
+
+    page._start_work.click()
+
+    assert rig.service.active_state().session_id is None
 
 
 def test_today_actions_use_horizontal_row_when_wide_and_stack_when_narrow(qtbot, rig, qapp):

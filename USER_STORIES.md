@@ -89,10 +89,10 @@ Acceptance criteria:
 
 ### US29 — Synchronize records without silent loss · P1
 
-Implementation status: **In progress** · completed work sessions and deductions currently use a
-snapshot merge by stable ID and numeric revision. The October audit reproduced remote loss,
-missed conflicts, ineligible deduction publication, and invalid imports (A01–A04). A durable
-change protocol, complete record coverage, conflict resolution, and scheduling remain.
+Implementation status: **In progress** · unsafe V1 snapshot writes are contained. Durable atomic
+capture, append/readback transport, and causal aggregate reconciliation for A01–A04 pass automated
+acceptance and the 547-test quality gate. Reviewed migration, conflict choices, production runtime
+wiring, responsive authorization, and scheduling remain; ordinary V2 publication is still disabled.
 
 As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 

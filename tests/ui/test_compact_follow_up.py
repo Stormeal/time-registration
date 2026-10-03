@@ -354,12 +354,11 @@ def test_manual_deduction_uses_visible_selected_parent_date(qtbot, rig, monkeypa
     from datetime import UTC, date, datetime
 
     from PySide6.QtCore import QDate, QTime
-    from PySide6.QtWidgets import QDialogButtonBox
+    from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
 
     from qi_flow.application.dto import ManualWorkSessionCommand
     from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
-    from PySide6.QtWidgets import QMessageBox
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Discard)
     rig.clock.value = datetime(2026, 10, 3, 12, tzinfo=UTC)
     session = rig.service.add_manual_session(
@@ -381,4 +380,3 @@ def test_manual_deduction_uses_visible_selected_parent_date(qtbot, rig, monkeypa
     deduction = rig.service.completed_deductions(session.id)[0]
     assert deduction.actual_started_at == datetime(2026, 10, 1, 10, tzinfo=UTC)
     assert deduction.actual_ended_at == datetime(2026, 10, 1, 10, 30, tzinfo=UTC)
-

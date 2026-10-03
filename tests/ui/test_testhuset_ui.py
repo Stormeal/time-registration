@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
 import pytest
-from PySide6.QtCore import QDate, QPoint, QPointF, Qt, QTime
+from PySide6.QtCore import QPoint, QPointF, Qt, QTime
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox, QScrollArea
 
@@ -14,7 +14,6 @@ from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import DeductionKind, IsoWeek, WorkLocation
 from qi_flow.domain.testhuset import ProjectTask
-from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.system import UuidIdentifierGenerator
@@ -49,12 +48,24 @@ def build(tmp_path, service_type=TesthusetService):
     return service, tracking, session, task
 
 
-def test_hidden_seconds_are_not_saved_from_minute_only_editors() -> None:
-    manual = ManualEntryDialog._as_copenhagen(QDate(2026, 9, 20), QTime(15, 0, 45))
-    correction = SessionEditorDialog._as_copenhagen(date(2026, 9, 20), QTime(17, 0, 30))
-
-    assert manual == datetime(2026, 9, 20, 15, 0, tzinfo=COPENHAGEN)
-    assert correction == datetime(2026, 9, 20, 17, 0, tzinfo=COPENHAGEN)
+def test_hidden_seconds_are_not_saved_from_minute_only_editors(qtbot, tmp_path) -> None:
+    _, tracking, _, _ = build(tmp_path)
+    manual = ManualEntryDialog(tracking, date(2026, 9, 16))
+    qtbot.addWidget(manual)
+    manual._start.setTime(QTime(15, 0, 45))
+    manual._end.setTime(QTime(17, 0, 30))
+    manual._buttons.button(QDialogButtonBox.StandardButton.Save).click()
+    saved = tracking.completed_sessions_for_day(date(2026, 9, 16))[0]
+    assert saved.actual_started_at == datetime(2026, 9, 16, 13, tzinfo=UTC)
+    assert saved.actual_ended_at == datetime(2026, 9, 16, 15, tzinfo=UTC)
+    correction = SessionEditorDialog(tracking, date(2026, 9, 16))
+    qtbot.addWidget(correction)
+    correction._start.setTime(QTime(14, 0, 45))
+    correction._end.setTime(QTime(18, 0, 30))
+    correction._save.click()
+    saved = tracking.completed_sessions_for_day(date(2026, 9, 16))[0]
+    assert saved.actual_started_at == datetime(2026, 9, 16, 12, tzinfo=UTC)
+    assert saved.actual_ended_at == datetime(2026, 9, 16, 16, tzinfo=UTC)
 
 
 def test_override_save_is_independent_of_time_correction(qtbot, tmp_path) -> None:
@@ -167,17 +178,15 @@ def test_double_clicking_a_day_opens_its_session_editor(qtbot, tmp_path, monkeyp
     assert opened == [datetime(2026, 9, 14)]
 
 
-def test_manual_entry_uses_one_date_and_time_only_inputs(qtbot, tmp_path) -> None:
+def test_manual_entry_exposes_both_endpoint_dates_and_exact_minutes(qtbot, tmp_path) -> None:
     _, tracking, _, _ = build(tmp_path)
     dialog = ManualEntryDialog(tracking, date(2026, 9, 14))
     qtbot.addWidget(dialog)
 
     assert dialog._date.date().toPython() == date(2026, 9, 14)
+    assert dialog._end_date.date().toPython() == date(2026, 9, 14)
     assert dialog._start.displayFormat() == "HH:mm"
     assert dialog._end.displayFormat() == "HH:mm"
-    assert dialog._as_copenhagen(dialog._date.date(), QTime(7, 30)) == datetime(
-        2026, 9, 14, 7, 30, tzinfo=COPENHAGEN
-    )
 
 
 def test_manual_break_label_still_creates_break_deduction(qtbot, tmp_path) -> None:
@@ -199,15 +208,15 @@ def test_manual_break_label_still_creates_break_deduction(qtbot, tmp_path) -> No
     assert deductions[0].kind is DeductionKind.SLEEP_BREAK
 
 
-def test_session_editor_uses_the_selected_day_and_time_only_inputs(qtbot, tmp_path) -> None:
+def test_session_editor_uses_saved_endpoint_dates_and_exact_minutes(qtbot, tmp_path) -> None:
     service, tracking, _, _ = build(tmp_path)
     dialog = SessionEditorDialog(tracking, date(2026, 9, 14), service)
     qtbot.addWidget(dialog)
     session_item = dialog._tree.topLevelItem(0)
     dialog._tree.setCurrentItem(session_item)
 
-    assert session_item.text(1) == "09:00"
-    assert session_item.text(2) == "16:45"
+    assert dialog._start_date.date().toPython() == date(2026, 9, 14)
+    assert dialog._end_date.date().toPython() == date(2026, 9, 14)
     assert dialog._start.displayFormat() == "HH:mm"
     assert dialog._end.displayFormat() == "HH:mm"
     dialog._start.setTime(QTime(8, 0))

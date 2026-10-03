@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+import sqlite3
+from datetime import date, datetime
 
-from PySide6.QtCore import Qt, QTime
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,7 +21,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QTextEdit,
-    QTimeEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -40,6 +40,7 @@ from qi_flow.domain.models import Deduction, DeductionKind, WorkLocation, WorkSe
 from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.ui.controls import SettingsWheelGuard
 from qi_flow.ui.daily_note_dialog import DailyNoteDialog
+from qi_flow.ui.date_time_input import DateTimeInput
 from qi_flow.ui.history_dialog import HistoryDialog
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 
@@ -57,6 +58,9 @@ class SessionEditorDialog(QDialog):
         self._service = service
         self._work_date = work_date
         self._testhuset = testhuset
+        self._loaded_selection: WorkSession | Deduction | None = None
+        self._loaded_interval: tuple[object, ...] = ()
+        self._loaded_task: object = None
         self.setWindowTitle(f"Edit sessions - {work_date:%d/%m/%Y}")
         self.resize(1100, 600)
         self._tree = QTreeWidget()
@@ -70,10 +74,13 @@ class SessionEditorDialog(QDialog):
                 column, QHeaderView.ResizeMode.ResizeToContents
             )
         self._tree.itemSelectionChanged.connect(self._load_selected)
-        self._start = QTimeEdit()
-        self._end = QTimeEdit()
-        for editor in (self._start, self._end):
-            editor.setDisplayFormat("HH:mm")
+        self._start_input = DateTimeInput(work_date, "Start")
+        self._end_input = DateTimeInput(work_date, "Finish")
+        self._start_date = self._start_input.date
+        self._end_date = self._end_input.date
+        self._start = self._start_input.time
+        self._end = self._end_input.time
+        for editor in (self._start_input, self._end_input):
             editor.setEnabled(False)
         self._save = QPushButton("Save correction")
         self._save.setProperty("role", "primary")
@@ -95,8 +102,8 @@ class SessionEditorDialog(QDialog):
         self._selection_help.setWordWrap(True)
         form.addRow(self._selection_help)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form.addRow("Start", self._start)
-        form.addRow("Finish", self._end)
+        form.addRow("Start", self._start_input)
+        form.addRow("Finish", self._end_input)
         form.addRow(self._save, self._delete)
         self._office = QCheckBox("Worked from office")
         self._note = QTextEdit(self)
@@ -174,10 +181,9 @@ class SessionEditorDialog(QDialog):
     def _refresh(self) -> None:
         selected = self._selected_value()
         selected_id = selected.id if selected is not None else None
+        blocker = QSignalBlocker(self._tree)
         self._tree.clear()
         for session in self._service.completed_sessions_for_day(self._work_date):
-            if session.actual_started_at.astimezone(COPENHAGEN).date() != self._work_date:
-                continue
             session_item = self._item(
                 "Work session", session, session.actual_started_at, session.actual_ended_at
             )
@@ -215,6 +221,9 @@ class SessionEditorDialog(QDialog):
                 value = candidate.data(0, Qt.ItemDataRole.UserRole)
                 if value.id == selected_id:
                     self._tree.setCurrentItem(candidate)
+        del blocker
+        self._loaded_selection = None
+        self._load_selected()
 
     def _item(
         self, label: str, value: WorkSession | Deduction, started: datetime, ended: datetime | None
@@ -225,6 +234,15 @@ class SessionEditorDialog(QDialog):
 
     def _load_selected(self) -> None:
         selected = self._selected_value()
+        previous = self._loaded_selection
+        if (
+            previous is not None
+            and (selected is None or selected.id != previous.id)
+            and not self._resolve_entry_changes()
+        ):
+            self._select_id(previous.id)
+            return
+        self._loaded_selection = selected
         enabled = selected is not None
         self._task.setEnabled(isinstance(selected, WorkSession))
         self._save_task.setEnabled(isinstance(selected, WorkSession))
@@ -278,24 +296,21 @@ class SessionEditorDialog(QDialog):
             self._task.setCurrentIndex(index)
         self._save.setEnabled(enabled)
         self._delete.setEnabled(enabled)
-        self._start.setEnabled(enabled)
-        self._end.setEnabled(enabled and not is_running_session)
+        self._start_input.setEnabled(enabled)
+        self._end_input.setEnabled(enabled and not is_running_session)
         if selected is not None:
-            self._start.setTime(self._as_qtime(selected.actual_started_at))
+            self._start_input.set_value(selected.actual_started_at)
         if selected is not None and selected.actual_ended_at is not None:
-            self._end.setTime(self._as_qtime(selected.actual_ended_at))
-        self._loaded_interval = (
-            self._start.time().toString("HH:mm"),
-            self._end.time().toString("HH:mm"),
-        )
+            self._end_input.set_value(selected.actual_ended_at)
+        self._loaded_interval = self._interval_values()
+        self._loaded_task = self._task.currentData()
 
-    def _save_selected(self) -> None:
-        selected = self._selected_value()
+    def _save_selected(self, *, refresh: bool = True) -> bool:
+        selected = self._loaded_selection
         if selected is None:
-            return
-        start = self._as_copenhagen(self._work_date, self._start.time())
-        end = self._as_copenhagen(self._work_date, self._end.time())
+            return False
         try:
+            start = self._start_input.utc_value()
             if isinstance(selected, WorkSession):
                 if selected.is_active:
                     self._service.update_active_work_start(
@@ -303,14 +318,74 @@ class SessionEditorDialog(QDialog):
                     )
                 else:
                     self._service.update_work_session(
-                        UpdateWorkSessionCommand(selected.id, start, end)
+                        UpdateWorkSessionCommand(selected.id, start, self._end_input.utc_value())
                     )
             else:
-                self._service.update_deduction(UpdateDeductionCommand(selected.id, start, end))
-        except DomainError as error:
+                self._service.update_deduction(
+                    UpdateDeductionCommand(selected.id, start, self._end_input.utc_value())
+                )
+        except (DomainError, OSError, sqlite3.Error) as error:
             QMessageBox.warning(self, "QI Flow", str(error))
-            return
-        self._refresh()
+            return False
+        self._loaded_interval = self._interval_values()
+        if refresh:
+            task_draft = self._task.currentData()
+            dirty_task = task_draft != self._loaded_task
+            self._refresh()
+            if dirty_task:
+                self._task.setCurrentIndex(self._task.findData(task_draft))
+        return True
+
+    def _interval_values(self) -> tuple[object, ...]:
+        return self._start_input.form_value(), self._end_input.form_value()
+
+    def _entry_is_dirty(self) -> bool:
+        return self._loaded_selection is not None and (
+            self._interval_values() != self._loaded_interval
+            or self._task.currentData() != self._loaded_task
+        )
+
+    def _resolve_entry_changes(self) -> bool:
+        if not self._entry_is_dirty():
+            return True
+        answer = self._unsaved_choice()
+        if answer == QMessageBox.StandardButton.Save:
+            return self._save_entry_draft()
+        return answer == QMessageBox.StandardButton.Discard
+
+    def _save_entry_draft(self) -> bool:
+        if self._interval_values() != self._loaded_interval and not self._save_selected(
+            refresh=False
+        ):
+            return False
+        if self._task.currentData() != self._loaded_task:
+            return self._assign_task(refresh=False)
+        return True
+
+    def _unsaved_choice(self) -> QMessageBox.StandardButton:
+        return QMessageBox.question(
+            self,
+            "Unsaved changes",
+            "Save your changes before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+    def _select_id(self, entity_id: object) -> None:
+        blocker = QSignalBlocker(self._tree)
+        for row in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(row)
+            assert item is not None
+            for candidate in [item, *(item.child(i) for i in range(item.childCount()))]:
+                if (
+                    candidate is not None
+                    and candidate.data(0, Qt.ItemDataRole.UserRole).id == entity_id
+                ):
+                    self._tree.setCurrentItem(candidate)
+                    break
+        del blocker
 
     def _delete_selected(self) -> None:
         selected = self._selected_value()
@@ -339,6 +414,8 @@ class SessionEditorDialog(QDialog):
         selected = self._selected_value()
         if not isinstance(selected, WorkSession):
             return
+        if not self._resolve_entry_changes():
+            return
         dialog = ManualEntryDialog(
             self._service,
             self._work_date,
@@ -349,6 +426,8 @@ class SessionEditorDialog(QDialog):
         self._refresh()
 
     def _open_history(self) -> None:
+        if not self._resolve_entry_changes():
+            return
         dialog = HistoryDialog(self._service, self._work_date)
         if dialog.exec():
             self._refresh()
@@ -358,14 +437,19 @@ class SessionEditorDialog(QDialog):
         self._office.setChecked(details is not None and details.location is WorkLocation.OFFICE)
         self._note.setPlainText(details.note if details is not None else "")
 
-    def _save_office_status(self) -> None:
-        self._service.update_day_details(
-            UpdateDayDetailsCommand(
-                self._work_date,
-                WorkLocation.OFFICE if self._office.isChecked() else WorkLocation.REMOTE,
-                self._note.toPlainText(),
+    def _save_office_status(self) -> bool:
+        try:
+            self._service.update_day_details(
+                UpdateDayDetailsCommand(
+                    self._work_date,
+                    WorkLocation.OFFICE if self._office.isChecked() else WorkLocation.REMOTE,
+                    self._note.toPlainText(),
+                )
             )
-        )
+        except (DomainError, OSError, sqlite3.Error) as error:
+            QMessageBox.warning(self, "QI Flow", str(error))
+            return False
+        return True
 
     def _open_daily_note(self) -> None:
         dialog = DailyNoteDialog(self._work_date, self._note.toPlainText(), self)
@@ -381,38 +465,33 @@ class SessionEditorDialog(QDialog):
         details = self._service.day_details(self._work_date)
         saved_office = details is not None and details.location is WorkLocation.OFFICE
         saved_note = details.note if details is not None else ""
-        selected = self._selected_value()
-        dirty_interval = False
-        if selected is not None:
-            dirty_interval = (
-                self._start.time().toString("HH:mm"),
-                self._end.time().toString("HH:mm"),
-            ) != self._loaded_interval
-        if (
-            self._office.isChecked() != saved_office
-            or self._note.toPlainText() != saved_note
-            or dirty_interval
-        ):
-            answer = QMessageBox.question(
-                self,
-                "Discard unsaved changes?",
-                "Your correction has unsaved changes. Discard them?",
-                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if answer != QMessageBox.StandardButton.Discard:
+        dirty_context = (
+            self._office.isChecked() != saved_office or self._note.toPlainText() != saved_note
+        )
+        if dirty_context or self._entry_is_dirty():
+            answer = self._unsaved_choice()
+            if answer == QMessageBox.StandardButton.Save:
+                if not self._save_entry_draft():
+                    return
+                if dirty_context and not self._save_office_status():
+                    return
+            elif answer != QMessageBox.StandardButton.Discard:
                 return
         super().reject()
 
-    def _assign_task(self) -> None:
-        selected = self._selected_value()
+    def _assign_task(self, *, refresh: bool = True) -> bool:
+        selected = self._loaded_selection
         if isinstance(selected, WorkSession) and self._testhuset is not None:
             try:
                 self._testhuset.assign(selected.id, self._task.currentData())
-            except (ValueError, OSError) as error:
+            except (ValueError, OSError, sqlite3.Error) as error:
                 QMessageBox.warning(self, "Testhuset task", str(error))
-                return
-            self._refresh()
+                return False
+            self._loaded_task = self._task.currentData()
+            if refresh and self._interval_values() == self._loaded_interval:
+                self._refresh()
+            return True
+        return False
 
     def _selected_value(self) -> WorkSession | Deduction | None:
         selected = self._tree.selectedItems()
@@ -421,14 +500,4 @@ class SessionEditorDialog(QDialog):
 
     @staticmethod
     def _time(value: datetime | None) -> str:
-        return value.astimezone(COPENHAGEN).strftime("%H:%M") if value else ""
-
-    @staticmethod
-    def _as_copenhagen(work_date: date, value: QTime) -> datetime:
-        """Use the minute shown in the editor; hidden QTime seconds are not an input."""
-        return datetime.combine(work_date, time(value.hour(), value.minute()), tzinfo=COPENHAGEN)
-
-    @staticmethod
-    def _as_qtime(value: datetime) -> QTime:
-        local = value.astimezone(COPENHAGEN)
-        return QTime(local.hour, local.minute, local.second)
+        return value.astimezone(COPENHAGEN).strftime("%d/%m/%Y %H:%M") if value else ""

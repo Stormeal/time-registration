@@ -17,6 +17,16 @@ SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 _LOG = logging.getLogger(__name__)
 
 
+def _authorization_error_category(error: Exception) -> str:
+    if isinstance(error, KeyringError):
+        return "CredentialManagerError"
+    if isinstance(error, ImportError):
+        return "DependencyError"
+    if isinstance(error, OSError):
+        return "NetworkError"
+    return "ValueError"
+
+
 class GoogleOAuthStore:
     def save_client_json(self, content: str) -> str:
         try:
@@ -71,14 +81,17 @@ class GoogleOAuthStore:
             flow = flow_module.InstalledAppFlow.from_client_config(
                 json.loads(content), list(SCOPES)
             )
-            credentials = flow.run_local_server(port=0, open_browser=True)
+            credentials = flow.run_local_server(
+                port=0, open_browser=True, authorization_prompt_message=None
+            )
             keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, credentials.to_json())
         except (ImportError, KeyringError, OSError, ValueError) as error:
             # OAuth values and callback URLs must never reach diagnostics.
-            _LOG.warning("Google authorization failed (%s)", type(error).__name__)
+            category = _authorization_error_category(error)
+            _LOG.warning("Google authorization failed (%s)", category)
             raise ValueError(
                 "Google authorization could not be completed "
-                f"({type(error).__name__}). Restart QI Flow after installing Google sync support, "
+                f"({category}). Restart QI Flow after installing Google sync support, "
                 "then try again."
             ) from error
 

@@ -147,7 +147,7 @@ part of Task 19 before final lifecycle acceptance.
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |
 | 17 — Reminder identity | A15; US02, US14 | Complete; independent timers and stale-dialog guards pass 57 focused tests and the integrated gate. |
 | 18 — Unattended backups | A14; US15 | Automated acceptance and 645-test gate passed. |
-| 19 — Architecture / CI | Cross-cutting | Pending. |
+| 19 — Architecture / CI | Cross-cutting | Ports and all-worker lifecycle passed 662-test gate; reproducible CI and profiling in progress. |
 | 20 — Windows and integration release gates | US21, US28–US32 | Pending. |
 
 ## Implementation rulings
@@ -194,6 +194,14 @@ as unresolved; rescanning never silently substitutes a different branch.
   quality gate. Tasks sharing tracking, Settings, ports, or bootstrap are coordinated explicitly.
 
 ## Release checks still required
+
+Task 19's lifecycle checkpoint passed **662 tests in 101.95 seconds**, 138 formatted Python
+files, Ruff clean and strict mypy clean for 76 source modules. Application ports now supply
+desktop backup/export/update boundaries. Recursive architecture checks cover nested and relative
+imports. Exit, restore and update restart share cancellation and native worker joins across
+Google, backup, updater and temporary browser operations. Restoration completes while process
+ownership is held; replacement processes launch only after release. Failed restore resumes
+tracking, and repeated close requests preserve the approved restart command.
 
 Clean-account installation/uninstallation, packaged updater success and rollback, two-client
 scratch-workbook concurrency and V1 cutover, and authorized live reviewed Testhuset/DSB fills

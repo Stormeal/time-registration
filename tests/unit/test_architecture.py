@@ -1,35 +1,90 @@
-"""Guard the dependency direction that keeps business rules portable."""
-
-from __future__ import annotations
+"""Recursive dependency guards, including relative and dynamic import boundaries."""
 
 import ast
+import importlib.util
+import sys
 from pathlib import Path
 
+import pytest
 
-def test_domain_does_not_import_outer_layers() -> None:
-    domain_root = Path("src/qi_flow/domain")
-    forbidden = ("qi_flow.application", "qi_flow.infrastructure", "qi_flow.ui", "PySide6")
-
-    for module_path in domain_root.glob("*.py"):
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
-        imports = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.append(node.module)
-
-        assert not [name for name in imports if name.startswith(forbidden)], module_path
+ROOT = Path("src")
 
 
-def test_application_does_not_import_qt_browser_or_infrastructure() -> None:
-    forbidden = ("qi_flow.infrastructure", "qi_flow.ui", "PySide6", "playwright")
-    for module_path in Path("src/qi_flow/application").glob("*.py"):
-        tree = ast.parse(module_path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            names = []
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module]
-            assert not any(name.startswith(forbidden) for name in names), module_path
+def violations(path: Path, root: Path = ROOT) -> list[str]:
+    parts = path.relative_to(root).with_suffix("").parts
+    module = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+    package = module if parts[-1] == "__init__" else module.rpartition(".")[0]
+    layer = parts[1]
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports = []
+    errors = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            name = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
+            imports.append(name)
+            imports.extend(name + "." + alias.name for alias in node.names)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                if (
+                    node.func.attr == "import_module"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                ):
+                    imports.append(str(node.args[0].value))
+                if layer == "ui" and node.func.attr in {
+                    "execute",
+                    "executemany",
+                    "executescript",
+                    "sync_for",
+                }:
+                    errors.append("UI database access")
+        elif layer == "ui" and isinstance(node, ast.Attribute) and node.attr == "_uow_factory":
+            errors.append("UI private repository access")
+    for name in imports:
+        first = name.split(".")[0]
+        if (
+            layer == "domain"
+            and first not in sys.stdlib_module_names
+            and not name.startswith("qi_flow.domain")
+        ):
+            errors.append(name)
+        if (
+            layer == "application"
+            and first not in sys.stdlib_module_names
+            and not (name.startswith("qi_flow.application") or name.startswith("qi_flow.domain"))
+        ):
+            errors.append(name)
+        if layer == "infrastructure" and name.startswith("qi_flow.ui"):
+            errors.append(name)
+        if layer == "ui" and name.startswith("qi_flow.infrastructure"):
+            errors.append(name)
+    return errors
+
+
+@pytest.mark.parametrize("layer", ["domain", "application", "infrastructure", "ui"])
+def test_inward_dependencies_recursively(layer):
+    failures = {
+        str(path): found
+        for path in (ROOT / "qi_flow" / layer).rglob("*.py")
+        if (found := violations(path))
+    }
+    assert not failures, failures
+
+
+@pytest.mark.parametrize(
+    "layer,content",
+    [
+        ("domain", "import requests"),
+        ("application", "from ...infrastructure.sqlite import database"),
+        ("application", 'import importlib\nimportlib.import_module("PySide6.QtCore")'),
+        ("infrastructure", "from ...ui import main_window"),
+        ("ui", 'def action(service):\n    service._uow_factory().execute("SELECT 1")'),
+    ],
+)
+def test_guard_detects_nested_relative_and_dynamic_violations(tmp_path, layer, content):
+    path = tmp_path / "qi_flow" / layer / "nested" / "module.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    assert violations(path, tmp_path)

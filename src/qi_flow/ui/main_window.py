@@ -22,6 +22,12 @@ from PySide6.QtWidgets import (
 
 from qi_flow import __version__
 from qi_flow.application.backups import BackupOperations
+from qi_flow.application.desktop import (
+    ReleaseOperations,
+    RuntimeDirectories,
+    StartupPreferences,
+    TimesheetExporter,
+)
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.google_sync_service import SyncResult
@@ -29,12 +35,9 @@ from qi_flow.application.ports import GoogleConnection
 from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
-from qi_flow.infrastructure.paths import AppPaths
-from qi_flow.infrastructure.startup import StartupManager
-from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.google_sync_controller import GoogleSyncController
+from qi_flow.ui.runtime_lifecycle import ShutdownGroup
 from qi_flow.ui.settings_page import SettingsPage
 from qi_flow.ui.testhuset_dialog import SheetFactory
 from qi_flow.ui.theme import ThemeManager, logo_path
@@ -46,14 +49,16 @@ class MainWindow(QMainWindow):
     """Stable application shell for feature-owned pages."""
 
     close_app_requested = Signal()
+    restore_requested = Signal(object)
+    update_install_requested = Signal(object, object)
 
     def __init__(
         self,
         service: TimeTrackingApplicationService | None = None,
         backups: BackupOperations | None = None,
-        exporter: CsvTimesheetExporter | None = None,
-        paths: AppPaths | None = None,
-        startup: StartupManager | None = None,
+        exporter: TimesheetExporter | None = None,
+        paths: RuntimeDirectories | None = None,
+        startup: StartupPreferences | None = None,
         testhuset: TesthusetService | None = None,
         sheet_factory: SheetFactory | None = None,
         credentials: TesthusetCredentialStore | None = None,
@@ -61,11 +66,12 @@ class MainWindow(QMainWindow):
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
         google_oauth: GoogleConnection | None = None,
-        releases: ReleaseClient | None = None,
+        releases: ReleaseOperations | None = None,
         google_controller: GoogleSyncController | None = None,
         sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
         sync_actions: GoogleSyncActions | None = None,
         backup_controller: BackupController | None = None,
+        shutdown: ShutdownGroup | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -121,11 +127,14 @@ class MainWindow(QMainWindow):
                 sync_command,
                 sync_actions,
                 backup_controller,
+                shutdown,
             )
+            settings_page.restore_requested.connect(self.restore_requested)
+            settings_page.update_install_requested.connect(self.update_install_requested)
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)
         timesheet_page = (
-            TimesheetPage(service, testhuset, sheet_factory, dsb, dsb_sheet_factory)
+            TimesheetPage(service, testhuset, sheet_factory, dsb, dsb_sheet_factory, shutdown)
             if service is not None
             else self._placeholder("Timesheet", "Tracking service is unavailable.")
         )

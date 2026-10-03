@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import shutil
-import sys
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
+from threading import Event
 
-from PySide6.QtCore import QCoreApplication, QDate, QProcess, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QDate, QProcess, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -39,6 +38,14 @@ from PySide6.QtWidgets import (
 )
 
 from qi_flow.application.backups import BackupOperations, BackupView
+from qi_flow.application.desktop import (
+    AvailableUpdate,
+    ReleaseOperations,
+    RuntimeDirectories,
+    StartupPreferences,
+    TimesheetExporter,
+    UpdateError,
+)
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import ReminderSettingsView
 from qi_flow.application.google_sync import GoogleSyncSettings
@@ -57,13 +64,10 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import IsoWeek
 from qi_flow.domain.time_rules import COPENHAGEN
-from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
-from qi_flow.infrastructure.paths import AppPaths
-from qi_flow.infrastructure.startup import StartupManager
-from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient, UpdateError
 from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.controls import SettingsWheelGuard
 from qi_flow.ui.google_sync_controller import GoogleSyncController
+from qi_flow.ui.runtime_lifecycle import ShutdownGroup
 from qi_flow.ui.sync_conflict_dialog import SyncConflictDialog
 from qi_flow.ui.sync_migration_dialog import MigrationRequest, SyncMigrationDialog
 from qi_flow.ui.testhuset_credentials_dialog import TesthusetCredentialsDialog
@@ -74,15 +78,19 @@ class UpdateCheckWorker(QThread):
     checked = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, client: ReleaseClient) -> None:
-        super().__init__()
+    def __init__(self, client: ReleaseOperations, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self._client = client
+        self.cancelled = Event()
 
     def run(self) -> None:
         try:
-            self.checked.emit(self._client.check())
+            result = self._client.check(cancelled=self.cancelled.is_set)
+            if not self.cancelled.is_set():
+                self.checked.emit(result)
         except UpdateError as error:
-            self.failed.emit(str(error))
+            if not self.cancelled.is_set():
+                self.failed.emit(str(error))
 
 
 class UpdateDownloadWorker(QThread):
@@ -90,23 +98,32 @@ class UpdateDownloadWorker(QThread):
     failed = Signal(str)
     progress = Signal(int, int)
 
-    def __init__(self, client: ReleaseClient, update: AvailableUpdate, destination: Path) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        client: ReleaseOperations,
+        update: AvailableUpdate,
+        destination: Path,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
         self._client = client
         self._update = update
         self._destination = destination
+        self.cancelled = Event()
 
     def run(self) -> None:
         try:
-            self.downloaded.emit(
-                self._client.download(
-                    self._update,
-                    self._destination,
-                    progress=self.progress.emit,
-                )
+            result = self._client.download(
+                self._update,
+                self._destination,
+                progress=self.progress.emit,
+                cancelled=self.cancelled.is_set,
             )
+            if not self.cancelled.is_set():
+                self.downloaded.emit(result)
         except UpdateError as error:
-            self.failed.emit(str(error))
+            if not self.cancelled.is_set():
+                self.failed.emit(str(error))
 
 
 class SettingsStack(QStackedWidget):
@@ -126,14 +143,16 @@ class SettingsPage(QWidget):
 
     preferences_saved = Signal()
     dsb_enabled_changed = Signal(bool)
+    restore_requested = Signal(object)
+    update_install_requested = Signal(object, object)
 
     def __init__(
         self,
         service: TimeTrackingApplicationService,
         backups: BackupOperations,
-        exporter: CsvTimesheetExporter,
-        paths: AppPaths,
-        startup: StartupManager,
+        exporter: TimesheetExporter,
+        paths: RuntimeDirectories,
+        startup: StartupPreferences,
         testhuset: TesthusetService | None = None,
         sheet_factory: SheetFactory | None = None,
         credentials: TesthusetCredentialStore | None = None,
@@ -141,14 +160,16 @@ class SettingsPage(QWidget):
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
         google_oauth: GoogleConnection | None = None,
-        releases: ReleaseClient | None = None,
+        releases: ReleaseOperations | None = None,
         google_controller: GoogleSyncController | None = None,
         sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
         sync_actions: GoogleSyncActions | None = None,
         backup_controller: BackupController | None = None,
+        shutdown: ShutdownGroup | None = None,
     ) -> None:
         super().__init__()
         self._service = service
+        self._shutdown = shutdown
         self._backups = backups
         self._backup_controller = backup_controller
         if backup_controller is not None:
@@ -1157,7 +1178,9 @@ class SettingsPage(QWidget):
             return
         selected = self._dsb_week.date()
         week = IsoWeek(*date(selected.year(), selected.month(), selected.day()).isocalendar()[:2])
-        TesthusetDialog(self._dsb, self._dsb_sheet_factory, week, scan_only=True).exec()
+        TesthusetDialog(
+            self._dsb, self._dsb_sheet_factory, week, scan_only=True, shutdown=self._shutdown
+        ).exec()
         self._refresh_dsb()
 
     def _save_dsb_default(self) -> None:
@@ -1177,7 +1200,9 @@ class SettingsPage(QWidget):
         selected = self._testhuset_week.date()
         day = date(selected.year(), selected.month(), selected.day())
         week = IsoWeek(*day.isocalendar()[:2])
-        dialog = TesthusetDialog(self._testhuset, self._sheet_factory, week, scan_only=True)
+        dialog = TesthusetDialog(
+            self._testhuset, self._sheet_factory, week, scan_only=True, shutdown=self._shutdown
+        )
         dialog.exec()
         self._refresh_testhuset()
         self._refresh_dsb_branches()
@@ -1255,18 +1280,26 @@ class SettingsPage(QWidget):
         QProcess.startDetached("explorer", [str(self._paths.log_dir)])
 
     def _check_for_updates(self) -> None:
-        if self._releases is None:
+        if self._releases is None or (
+            self._update_worker is not None and self._update_worker.isRunning()
+        ):
             return
         if self._update_progress is not None:
             self._update_progress.setValue(0)
             self._update_progress.setVisible(False)
         self._check_updates.setEnabled(False)
         self._update_status.setText("Checking the QI Flow release service…")
-        worker = UpdateCheckWorker(self._releases)
+        worker = UpdateCheckWorker(self._releases, self)
         worker.checked.connect(self._update_check_finished)
         worker.failed.connect(self._update_failed)
-        worker.finished.connect(lambda: self._check_updates.setEnabled(True))
+        worker.finished.connect(
+            lambda: self._check_updates.setEnabled(self._update_worker is worker)
+        )
         self._update_worker = worker
+        if self._shutdown is not None and not self._shutdown.track_thread(
+            worker, worker.cancelled.set
+        ):
+            return
         worker.start()
 
     def _update_check_finished(self, update: object) -> None:
@@ -1299,12 +1332,18 @@ class SettingsPage(QWidget):
             self._update_progress.setVisible(True)
         self._set_update_download_status(0, update.size)
         destination = self._paths.data_dir / "updates" / f"QI-Flow-{update.version}.zip"
-        worker = UpdateDownloadWorker(releases, update, destination)
+        worker = UpdateDownloadWorker(releases, update, destination, self)
         worker.progress.connect(self._update_download_progress)
         worker.downloaded.connect(self._update_downloaded)
         worker.failed.connect(self._update_failed)
-        worker.finished.connect(lambda: self._check_updates.setEnabled(True))
+        worker.finished.connect(
+            lambda: self._check_updates.setEnabled(self._update_worker is worker)
+        )
         self._update_worker = worker
+        if self._shutdown is not None and not self._shutdown.track_thread(
+            worker, worker.cancelled.set
+        ):
+            return
         worker.start()
 
     def _update_download_progress(self, received: int, total: int) -> None:
@@ -1335,41 +1374,7 @@ class SettingsPage(QWidget):
             self._update_progress.setValue(100)
             self._update_progress.setVisible(False)
         self._update_status.setText("Download verified. Preparing to install the update…")
-        app_executable = Path(sys.executable).resolve()
-        install_dir = app_executable.parent
-        bundled_helper = install_dir / "QI Flow Updater.exe"
-        if not bundled_helper.is_file() or install_dir.name.casefold() != "qi flow":
-            self._update_failed(
-                "In-app updates are available from an installed Windows build only."
-            )
-            return
-        updates_dir = self._paths.data_dir / "updates"
-        helper = updates_dir / "QI Flow Updater.exe"
-        try:
-            updates_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled_helper, helper)
-        except OSError:
-            self._update_failed("The update helper could not be staged in your user data folder.")
-            return
-        success, _ = QProcess.startDetached(
-            str(helper),
-            [
-                "--pid",
-                str(QCoreApplication.applicationPid()),
-                "--archive",
-                str(archive),
-                "--install-dir",
-                str(install_dir),
-                "--sha256",
-                self._pending_update.sha256,
-            ],
-            str(updates_dir),
-        )
-        if not success:
-            self._update_failed("The update helper could not be started. QI Flow is unchanged.")
-            return
-        self._update_status.setText("Installing the verified update and restarting QI Flow…")
-        QCoreApplication.quit()
+        self.update_install_requested.emit(self._pending_update, archive)
 
     def _update_failed(self, message: str) -> None:
         if self._update_progress is not None:
@@ -1397,13 +1402,7 @@ class SettingsPage(QWidget):
         )
         if answer is not QMessageBox.StandardButton.Yes:
             return
-        try:
-            self._backups.restore(backup)
-        except (OSError, ValueError) as error:
-            self._show_error("Restore failed", str(error))
-            return
-        QProcess.startDetached(sys.executable, sys.argv[1:])
-        QCoreApplication.quit()
+        self.restore_requested.emit(backup)
 
     def _export(self, kind: str) -> None:
         start, end = self._selected_range()

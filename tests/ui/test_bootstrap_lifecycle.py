@@ -259,3 +259,75 @@ def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_rele
         window.deleteLater()
     for controller in controllers:
         controller.deleteLater()
+
+
+def test_reviewed_restore_waits_for_workers_and_launches_only_after_lock_release(
+    qapp, tmp_path, monkeypatch
+):
+    from datetime import datetime
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+
+    from qi_flow.application.backups import BackupView
+    from qi_flow.domain.time_rules import COPENHAGEN
+
+    paths = AppPaths.for_root(tmp_path / "reviewed restore")
+    monkeypatch.setenv("QI_FLOW_DATA_DIR", str(paths.data_dir))
+    previous_quit = qapp.quitOnLastWindowClosed()
+    monkeypatch.setattr(bootstrap, "QApplication", lambda args: qapp)
+    monkeypatch.setattr(bootstrap.QSystemTrayIcon, "isSystemTrayAvailable", lambda: False)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    events, windows = [], []
+    real_window = bootstrap.MainWindow
+
+    def window(*args, **kwargs):
+        result = real_window(*args, **kwargs)
+        windows.append(result)
+        return result
+
+    monkeypatch.setattr(bootstrap, "MainWindow", window)
+    monkeypatch.setattr(
+        bootstrap.BackupManager, "restore", lambda self, backup: events.append("restore")
+    )
+
+    class Guard(SingleInstanceGuard):
+        def release(self):
+            events.append("release")
+            super().release()
+
+    monkeypatch.setattr(bootstrap, "SingleInstanceGuard", Guard)
+
+    def launch(*args):
+        assert events == ["restore", "release"]
+        replacement = SingleInstanceGuard(
+            bootstrap._guard_key(paths.data_dir), lock_path=paths.data_dir / "qi-flow.instance.lock"
+        )
+        assert replacement.try_acquire()
+        replacement.release()
+        events.append("launch")
+        return True, 12345
+
+    monkeypatch.setattr(bootstrap.QProcess, "startDetached", launch)
+    real_exec = qapp.exec
+
+    def run_loop():
+        backup = BackupView(
+            tmp_path / "synthetic.sqlite3", datetime(2026, 10, 3, tzinfo=COPENHAGEN)
+        )
+        QTimer.singleShot(0, lambda: windows[0].restore_requested.emit(backup))
+        watchdog = QTimer(qapp)
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(qapp.quit)
+        watchdog.start(5000)
+        result = real_exec()
+        watchdog.stop()
+        return result
+
+    monkeypatch.setattr(qapp, "exec", run_loop)
+    assert bootstrap.run(["qi-flow"]) == 0
+    assert events == ["restore", "release", "launch"]
+    qapp.setQuitOnLastWindowClosed(previous_quit)
+    QCoreApplication.removePostedEvents(qapp, QEvent.Type.Quit)
+    for window in windows:
+        window.hide()
+        window.deleteLater()

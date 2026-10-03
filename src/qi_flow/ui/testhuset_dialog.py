@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from threading import Event
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -29,6 +29,7 @@ from qi_flow.application.testhuset import (
 )
 from qi_flow.domain.models import IsoWeek
 from qi_flow.domain.testhuset import decimal_hours
+from qi_flow.ui.runtime_lifecycle import ShutdownGroup
 
 SheetFactory = Callable[[Event, Callable[[str], None]], AbstractContextManager[WeeklySheet]]
 _LOG = logging.getLogger(__name__)
@@ -46,8 +47,9 @@ class TesthusetWorker(QThread):
         factory: SheetFactory,
         week: IsoWeek,
         scan_only: bool,
+        parent: QObject | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self.service, self.factory, self.week = service, factory, week
         self.scan_only = scan_only
         self.cancelled = Event()
@@ -110,6 +112,7 @@ class TesthusetDialog(QDialog):
         week: IsoWeek,
         *,
         scan_only: bool = False,
+        shutdown: ShutdownGroup | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{service.destination} — week {week.week}, {week.year}")
@@ -137,7 +140,7 @@ class TesthusetDialog(QDialog):
         self._cancel = QPushButton("Cancel")
         self._cancel.clicked.connect(self.reject)
         self._choices: dict[int, QComboBox] = {}
-        self._worker = TesthusetWorker(service, factory, week, scan_only)
+        self._worker = TesthusetWorker(service, factory, week, scan_only, self)
         self._worker.status.connect(self._status.setText)
         self._worker.preview_ready.connect(self._preview)
         self._worker.outcome.connect(self._outcome)
@@ -151,7 +154,13 @@ class TesthusetDialog(QDialog):
         layout.addWidget(self._coverage_table)
         layout.addWidget(self._table)
         layout.addLayout(buttons)
-        self._worker.start()
+
+        def cancel() -> None:
+            self._worker.cancelled.set()
+            self._worker.decision.set()
+
+        if shutdown is None or shutdown.track_thread(self._worker, cancel):
+            self._worker.start()
 
     def _preview(self, preview: FillPreview) -> None:
         if isinstance(preview, DsbPreview):

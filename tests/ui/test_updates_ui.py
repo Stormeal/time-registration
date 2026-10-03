@@ -253,3 +253,54 @@ def test_real_yes_click_starts_update_download(tmp_path, qtbot: QtBot, monkeypat
     assert isinstance(page._update_worker, UpdateDownloadWorker)
     assert page._update_progress.isVisible()
     assert not page._check_updates.isEnabled()
+
+
+def test_finished_metadata_worker_cannot_enable_another_check_during_download(
+    qtbot, rig, monkeypatch
+):
+    import hashlib
+    import threading
+
+    from PySide6.QtCore import QCoreApplication
+
+    started, release = threading.Event(), threading.Event()
+    content = b"synthetic package"
+    version = newer_version()
+    payload = json.dumps(
+        {
+            "tag_name": version,
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "name": "QI-Flow-Update.zip",
+                    "browser_download_url": f"https://github.com/Stormeal/time-registration/releases/download/{version}/QI-Flow-Update.zip",
+                    "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                }
+            ],
+        }
+    ).encode()
+
+    class DownloadResponse(Response):
+        def read(self, *args):
+            started.set()
+            assert release.wait(2)
+            return super().read(*args)
+
+    def opener(request, **kwargs):
+        return (
+            Response(payload) if "api.github.com" in request.full_url else DownloadResponse(content)
+        )
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: int(QMessageBox.StandardButton.Yes))
+    page = SettingsPage(*rig.window_args, releases=ReleaseClient(opener))
+    qtbot.addWidget(page)
+    page._check_for_updates()
+    try:
+        qtbot.waitUntil(started.is_set)
+        QCoreApplication.processEvents()
+        assert not page._check_updates.isEnabled()
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: not page._update_worker.isRunning())

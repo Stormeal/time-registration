@@ -27,6 +27,39 @@ def newer_version() -> str:
     return f"v{major}.{minor}.{int(patch) + 1}"
 
 
+def test_cancelled_check_never_opens_network():
+    attempts = []
+    client = ReleaseClient(lambda *args, **kwargs: attempts.append(1))
+    with pytest.raises(UpdateError, match="cancelled"):
+        client.check(cancelled=lambda: True)
+    assert attempts == []
+
+
+def test_cancel_during_download_removes_partial_package(tmp_path):
+    from qi_flow.application.desktop import AvailableUpdate
+
+    cancelled = [False]
+    content = b"x" * (2 * 1024 * 1024)
+
+    class CancelResponse(Response):
+        def read(self, size=-1):
+            chunk = super().read(size)
+            cancelled[0] = True
+            return chunk
+
+    client = ReleaseClient(lambda *args, **kwargs: CancelResponse(content))
+    update = AvailableUpdate(
+        newer_version(),
+        f"https://github.com/Stormeal/time-registration/releases/download/{newer_version()}/QI-Flow-Update.zip",
+        hashlib.sha256(content).hexdigest(),
+        len(content),
+    )
+    destination = tmp_path / "partial.zip"
+    with pytest.raises(UpdateError, match="cancelled"):
+        client.download(update, destination, cancelled=lambda: cancelled[0])
+    assert not destination.exists()
+
+
 def release_payload(version: str | None = None, digest: str | None = None) -> bytes:
     if version is None:
         version = newer_version()

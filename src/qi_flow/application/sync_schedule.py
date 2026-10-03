@@ -67,3 +67,8 @@ class SyncSchedule:
 
     def close(self) -> None:
         self._closing = True
+
+    def resume(self) -> None:
+        self._closing = False
+        self._next_check = self._retry_at = None
+        self._failures = 0

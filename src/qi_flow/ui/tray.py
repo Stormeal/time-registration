@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from qi_flow.application.desktop import StartupPreferences
 from qi_flow.application.dto import (
     FinishDeductionCommand,
     FinishWorkCommand,
@@ -17,7 +18,6 @@ from qi_flow.application.dto import (
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import DeductionKind
-from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.ui.formatting import format_duration
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
 from qi_flow.ui.reminder_dialog import ReminderDialog
@@ -41,7 +41,7 @@ class TrayController(QObject):
         self,
         icon: QIcon,
         service: TimeTrackingApplicationService,
-        startup_manager: StartupManager,
+        startup_manager: StartupPreferences,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)

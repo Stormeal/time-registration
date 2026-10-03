@@ -20,6 +20,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from qi_flow import __version__
 from qi_flow.application.backup_schedule import BackupSchedule
+from qi_flow.application.backups import BackupView
+from qi_flow.application.desktop import AvailableUpdate, RestartCommand, UpdateError
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
 from qi_flow.application.google_sync_service import (
@@ -47,11 +49,13 @@ from qi_flow.infrastructure.system import SystemClock, UuidIdentifierGenerator
 from qi_flow.infrastructure.testhuset_browser import temporary_sheet
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
+from qi_flow.infrastructure.update_launcher import prepare_update
 from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.exit_dialog import ExitCoordinator
 from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 from qi_flow.ui.main_window import MainWindow
+from qi_flow.ui.runtime_lifecycle import RuntimeLifecycle, ShutdownGroup
 from qi_flow.ui.tray import TrayController
 
 
@@ -233,6 +237,11 @@ def run(argv: list[str] | None = None) -> int:
     automatic_sync = AutomaticSyncController(
         sync_actions, google_controller, SyncSchedule(SystemClock()), app
     )
+    shutdown = ShutdownGroup(app)
+    shutdown.register_controller(google_controller)
+    shutdown.register_controller(backup_controller)
+    shutdown.closing.connect(automatic_sync.begin_shutdown)
+    shutdown.resumed.connect(automatic_sync.resume)
 
     window = MainWindow(
         service,
@@ -256,6 +265,7 @@ def run(argv: list[str] | None = None) -> int:
         google_controller,
         sync_actions=sync_actions,
         backup_controller=backup_controller,
+        shutdown=shutdown,
     )
     guard.focus_requested.connect(window.reveal)
 
@@ -263,24 +273,57 @@ def run(argv: list[str] | None = None) -> int:
     app.setWindowIcon(icon)
 
     exit_coordinator = ExitCoordinator(service, window)
-    shutting_down = False
+    pending_restart: RestartCommand | None = None
 
-    def finish_exit() -> None:
-        if not shutting_down or google_controller.busy or backup_controller.busy:
-            return
+    def restore_backup(backup: object) -> None:
+        if not isinstance(backup, BackupView) or service.active_state().session_id is not None:
+            raise ValueError("Finish active work and choose a verified backup before restoring.")
+        backups.restore(backup)
+
+    lifecycle = RuntimeLifecycle(shutdown, restore_backup)
+
+    def freeze_tracking(frozen: bool) -> None:
+        for widget in app.topLevelWidgets():
+            widget.setEnabled(not frozen)
+
+    lifecycle.frozen.connect(freeze_tracking)
+    lifecycle.failed.connect(lambda message: QMessageBox.warning(window, "Restore failed", message))
+
+    def finish_exit(command: object) -> None:
+        nonlocal pending_restart
+        pending_restart = command if isinstance(command, RestartCommand) else None
         window.allow_exit()
         app.quit()
 
-    google_controller.ready_for_shutdown.connect(finish_exit)
-    backup_controller.ready_for_shutdown.connect(finish_exit)
+    lifecycle.ready_to_quit.connect(finish_exit)
+    exit_coordinator.exit_confirmed.connect(lifecycle.exit)
 
-    def begin_exit() -> None:
-        nonlocal shutting_down
-        shutting_down = True
-        automatic_sync.begin_shutdown()
-        backup_controller.begin_shutdown()
+    def request_restore(backup: object) -> None:
+        if service.active_state().session_id is not None:
+            QMessageBox.warning(window, "Finish work first", "Finish active work before restoring.")
+            return
+        lifecycle.restore(backup, RestartCommand(sys.executable, tuple(sys.argv[1:])))
 
-    exit_coordinator.exit_confirmed.connect(begin_exit)
+    def request_update(update: object, archive: object) -> None:
+        if not isinstance(update, AvailableUpdate) or not isinstance(archive, Path):
+            return
+        try:
+            command = prepare_update(
+                update,
+                archive,
+                context.paths.data_dir,
+                Path(sys.executable),
+                QCoreApplication.applicationPid(),
+            )
+        except UpdateError as error:
+            QMessageBox.warning(window, "QI Flow update", str(error))
+            return
+        approval = ExitCoordinator(service, window)
+        approval.exit_confirmed.connect(lambda: lifecycle.exit(command))
+        approval.request_exit()
+
+    window.restore_requested.connect(request_restore)
+    window.update_install_requested.connect(request_update)
     window.close_app_requested.connect(exit_coordinator.request_exit)
 
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -314,12 +357,24 @@ def run(argv: list[str] | None = None) -> int:
             "setup.",
         )
     exit_code = app.exec()
-    automatic_sync.begin_shutdown()
-    google_controller.wait_for_shutdown()
-    backup_controller.wait_for_shutdown()
+    shutdown.wait_for_shutdown()
     if tray is not None:
         tray.hide()
     guard.release()
+    if pending_restart is not None:
+        launched, _pid = QProcess.startDetached(
+            pending_restart.program,
+            list(pending_restart.arguments),
+            pending_restart.working_directory,
+        )
+        if not launched:
+            QMessageBox.critical(
+                None,
+                "QI Flow could not restart",
+                "QI Flow closed safely, but its replacement could not be started. "
+                "Open QI Flow from your shortcut and retry if needed.",
+            )
+            return 1
     log.info("QI Flow stopped with exit code %d", exit_code)
     _ = context  # Keep runtime-owned adapters alive for the event-loop lifetime.
     return exit_code

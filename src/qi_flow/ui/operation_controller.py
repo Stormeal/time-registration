@@ -88,6 +88,11 @@ class OwnedOperationController(QObject):
             self._worker.wait()
             self._finished()
 
+    def resume_after_shutdown(self) -> None:
+        if self.busy:
+            raise RuntimeError("Finish the owned worker before resuming.")
+        self._closing = False
+
     @Slot(str, object)
     def _completed(self, kind: str, result: object) -> None:
         if not self._closing and self._valid():
@@ -103,6 +108,7 @@ class OwnedOperationController(QObject):
         worker, self._worker = self._worker, None
         if worker is None:
             return
+        worker.wait()
         worker.deleteLater()
         self.busy_changed.emit(False)
         if self._closing:

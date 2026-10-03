@@ -88,3 +88,10 @@ class AutomaticSyncController(QObject):
         # A two-minute job/15-second HTTP cleanup cannot fit the five-second close budget.
         # Cancel current work; its immutable outbox will be retried on the next opening.
         self._worker.begin_shutdown()
+
+    @Slot()
+    def resume(self) -> None:
+        self._closed = False
+        self._running = None
+        self._schedule.resume()
+        self._timer.start()

@@ -84,3 +84,8 @@ class BackupController(QObject):
     def wait_for_shutdown(self) -> None:
         self.begin_shutdown()
         self._worker.wait_for_shutdown()
+
+    def resume_after_shutdown(self) -> None:
+        self._worker.resume_after_shutdown()
+        self._closed = False
+        self._timer.start()

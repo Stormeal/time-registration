@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
 
-from qi_flow.application.sync_models import SyncJobCancelledError
+from qi_flow.application.sync_models import SyncAuthorizationRequiredError, SyncJobCancelledError
 
 _SERVICE = "QI Flow Google Sheets Sync"
 _TOKEN_ACCOUNT = "refresh-token"
@@ -87,6 +87,21 @@ def _authorization_error_category(error: Exception) -> str:
 
 
 class GoogleOAuthStore:
+    def __init__(self, *, client_id: Callable[[], str | None] | None = None) -> None:
+        self._client_id = client_id
+
+    def _matching_client(self, token: str, setup: str | None) -> bool:
+        try:
+            stored_id = json.loads(setup or "{}")["installed"]["client_id"]
+            token_id = json.loads(token)["client_id"]
+            return (
+                isinstance(stored_id, str)
+                and token_id == stored_id
+                and (self._client_id is None or self._client_id() == stored_id)
+            )
+        except (ValueError, TypeError, KeyError):
+            return False
+
     def save_client_json(self, content: str) -> str:
         try:
             client = json.loads(content)["installed"]
@@ -170,6 +185,13 @@ class GoogleOAuthStore:
                 _check_authorization(cancelled, deadline)
                 payload = flow.credentials.to_json()
                 _check_authorization(cancelled, deadline)
+                if keyring.get_password(_SERVICE, _CLIENT_ACCOUNT) != content or (
+                    self._client_id is not None
+                    and self._client_id() != json.loads(content)["installed"]["client_id"]
+                ):
+                    raise SyncJobCancelledError(
+                        "Google client setup changed; authorize the current client again."
+                    )
                 keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, payload)
             finally:
                 server.server_close()
@@ -187,7 +209,10 @@ class GoogleOAuthStore:
 
     def is_authorized(self) -> bool:
         try:
-            return keyring.get_password(_SERVICE, _TOKEN_ACCOUNT) is not None
+            token = keyring.get_password(_SERVICE, _TOKEN_ACCOUNT)
+            return token is not None and self._matching_client(
+                token, keyring.get_password(_SERVICE, _CLIENT_ACCOUNT)
+            )
         except KeyringError:
             return False
 
@@ -197,7 +222,11 @@ class GoogleOAuthStore:
         except KeyringError as error:
             raise ValueError("Windows Credential Manager is unavailable.") from error
         if payload is None:
-            raise ValueError("Authorize this machine before synchronizing.")
+            raise SyncAuthorizationRequiredError("Authorize this machine before synchronizing.")
+        if not self._matching_client(payload, keyring.get_password(_SERVICE, _CLIENT_ACCOUNT)):
+            raise SyncAuthorizationRequiredError(
+                "Google client setup changed; authorize this computer again."
+            )
         try:
             credentials_module: Any = importlib.import_module("google.oauth2.credentials")
             request_module: Any = importlib.import_module("google.auth.transport.requests")
@@ -215,7 +244,9 @@ class GoogleOAuthStore:
                 keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, credentials.to_json())
             return credentials
         except (ImportError, KeyringError, ValueError) as error:
-            raise ValueError("Google authorization needs to be repeated.") from error
+            raise SyncAuthorizationRequiredError(
+                "Google authorization needs to be repeated."
+            ) from error
 
     def disconnect(self) -> None:
         for account in (_TOKEN_ACCOUNT, _CLIENT_ACCOUNT):

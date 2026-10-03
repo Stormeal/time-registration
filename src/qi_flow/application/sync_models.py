@@ -395,3 +395,15 @@ class SyncJobObsoleteError(ValueError):
 
 class SyncJobCancelledError(ValueError):
     """Cancellation left any uncertain publication durably pending."""
+
+
+class SyncRetryError(ValueError):
+    """A transient request refusal with a sanitized server retry delay."""
+
+    def __init__(self, retry_after: float = 0) -> None:
+        super().__init__("Google is temporarily unavailable. Pending changes are retained.")
+        self.retry_after = retry_after
+
+
+class SyncAuthorizationRequiredError(ValueError):
+    """The current connection requires renewed explicit authorization."""

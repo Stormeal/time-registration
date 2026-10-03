@@ -41,9 +41,14 @@ from qi_flow.application.dto import ReminderSettingsView
 from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.google_sync_service import GoogleSyncUpgradeRequiredError, SyncResult
 from qi_flow.application.ports import GoogleConnection
-from qi_flow.application.sync_actions import GoogleSyncActions, SyncAuthorizationRequiredError
+from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.sync_migration import MigrationStatus
-from qi_flow.application.sync_models import SyncJobCancelledError, canonical_json
+from qi_flow.application.sync_models import (
+    SyncAuthorizationRequiredError,
+    SyncJobCancelledError,
+    SyncRetryError,
+    canonical_json,
+)
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
@@ -396,6 +401,7 @@ class SettingsPage(QWidget):
                 self._sync_sheet_url.setText(saved_sync.sheet_url)
                 self._sync_client_id.setText(saved_sync.oauth_client_id)
             sync_save = QPushButton("Save sync connection")
+            self._sync_save = sync_save
             sync_save.clicked.connect(self._save_google_sync)
             sync_form = QFormLayout()
             sync_form.addRow("Shared Sheet URL", self._sync_sheet_url)
@@ -410,6 +416,7 @@ class SettingsPage(QWidget):
             )
             if google_oauth is not None:
                 save_client = QPushButton("Save OAuth client")
+                self._save_client_button = save_client
                 save_client.clicked.connect(self._save_google_client)
                 client_form = QFormLayout()
                 client_form.addRow("Desktop OAuth client secret", self._sync_client_secret)
@@ -438,7 +445,9 @@ class SettingsPage(QWidget):
                 self._sync_now.clicked.connect(self._sync_google_now)
                 self._sync_progress = QProgressBar()
                 self._sync_progress.setVisible(False)
-                self._sync_status = QLabel("Completed records sync only when you ask.")
+                self._sync_status = QLabel(
+                    "Completed changes sync automatically after reviewed migration."
+                )
                 self._sync_status.setWordWrap(True)
                 sync_action_form = QFormLayout()
                 sync_action_form.addRow("Status", self._sync_status)
@@ -754,7 +763,7 @@ class SettingsPage(QWidget):
             self._dsb_default.setItemText(0, "Allocation cache unavailable — scan again")
 
     def _save_google_sync(self) -> None:
-        if self._google_sync is None:
+        if self._google_sync is None or self._google_controller.busy:
             return
         try:
             self._google_sync.save_values(self._sync_sheet_url.text(), self._sync_client_id.text())
@@ -764,7 +773,7 @@ class SettingsPage(QWidget):
             self._show_error("Could not save sync connection", str(error))
 
     def _choose_google_client(self) -> None:
-        if self._google_oauth is None:
+        if self._google_oauth is None or self._google_controller.busy:
             return
         filename, _ = QFileDialog.getOpenFileName(
             self, "Choose Google OAuth client JSON", "", "JSON files (*.json)"
@@ -780,7 +789,7 @@ class SettingsPage(QWidget):
             self._show_error("Could not save Google client", str(error))
 
     def _save_google_client(self) -> None:
-        if self._google_oauth is None:
+        if self._google_oauth is None or self._google_controller.busy:
             return
         try:
             self._google_oauth.save_client(
@@ -798,6 +807,14 @@ class SettingsPage(QWidget):
 
     def _google_busy_changed(self, busy: bool) -> None:
         if hasattr(self, "_google_auth_button"):
+            for field in (
+                self._sync_sheet_url,
+                self._sync_client_id,
+                self._sync_client_secret,
+                self._sync_save,
+                self._save_client_button,
+            ):
+                field.setEnabled(not busy)
             self._google_auth_button.setEnabled(not busy)
             self._sync_now.setEnabled(not busy)
             self._google_cancel.setEnabled(busy)
@@ -838,6 +855,8 @@ class SettingsPage(QWidget):
                 message = str(error)
             elif isinstance(error, SyncJobCancelledError):
                 message = "Sync cancelled. Unverified changes remain pending."
+            elif isinstance(error, SyncRetryError):
+                message = str(error)
             elif isinstance(error, OSError):
                 message = "Offline or request timed out. Pending changes are retained."
             else:
@@ -858,7 +877,7 @@ class SettingsPage(QWidget):
                 self._conflict_dialog.show_failure(message)
 
     def _disconnect_google(self) -> None:
-        if self._google_oauth is None:
+        if self._google_oauth is None or self._google_controller.busy:
             return
         try:
             self._google_oauth.disconnect()
@@ -896,7 +915,7 @@ class SettingsPage(QWidget):
             self._sync_now.setEnabled(False)
             self._sync_status.setText("Status: synchronizing completed records…")
             self._sync_event_message = None
-            self._google_controller.start("sync", command)
+            self._google_controller.start("sync", command, valid=self._google_job_validity())
         except ValueError as error:
             self._sync_status.setText(str(error))
 
@@ -982,6 +1001,7 @@ class SettingsPage(QWidget):
                 writers_paused=request.writers_paused,
                 cancelled=cancelled,
             ),
+            valid=self._google_job_validity(),
         )
 
     def _open_sync_review(self) -> None:
@@ -1015,7 +1035,12 @@ class SettingsPage(QWidget):
                 raise SyncJobCancelledError("Resolution cancelled before saving.")
             actions.resolve(conflict_id, heads, payloads)
 
-        self._google_controller.start("resolve", resolve)
+        self._google_controller.start("resolve", resolve, valid=self._google_job_validity())
+
+    def _google_job_validity(self) -> Callable[[], bool]:
+        settings = self._google_sync
+        generation = settings.generation() if settings is not None else None
+        return lambda: settings is None or settings.generation() == generation
 
     def _show_sync_problems(self) -> None:
         if self._sync_actions is None:

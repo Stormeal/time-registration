@@ -179,6 +179,9 @@ def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_rele
     started = threading.Event()
 
     class OAuth:
+        def __init__(self, **kwargs):
+            pass
+
         def is_authorized(self):
             return False
 

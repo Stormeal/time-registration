@@ -11,17 +11,21 @@ from qi_flow.application.google_sync_service import (
     SyncService,
 )
 from qi_flow.application.ports import Clock, GoogleConnection, UnitOfWork
+from qi_flow.application.sync_capture import active_target
 from qi_flow.application.sync_migration import MigrationStatus, SyncMigration
-from qi_flow.application.sync_models import EntityKey, SyncConflictReview, SyncProblem, SyncTarget
+from qi_flow.application.sync_models import (
+    EntityKey,
+    SyncAuthorizationRequiredError,
+    SyncConflictReview,
+    SyncProblem,
+    SyncTarget,
+)
+from qi_flow.application.sync_schedule import SyncScheduleState
 
 type ServiceFactory = Callable[
     [GoogleSyncConfiguration, SyncTarget, int, Callable[[], bool]], SyncService
 ]
 type MigrationFactory = Callable[[GoogleSyncConfiguration, int, Callable[[], bool]], SyncMigration]
-
-
-class SyncAuthorizationRequiredError(ValueError):
-    pass
 
 
 class GoogleSyncActions:
@@ -74,6 +78,29 @@ class GoogleSyncActions:
         return service.run_once(
             cancelled=cancelled, deadline=self._clock.now() + timedelta(minutes=2)
         )
+
+    def schedule_state(self) -> SyncScheduleState:
+        with self._factory() as uow:
+            target = active_target(uow)
+            if target is None or not self._authorization.is_authorized():
+                return SyncScheduleState(None)
+            value = uow.settings.get("google_sync_generation")
+            generation = value if type(value) is int else 0
+            repo = uow.sync_for(target)
+            eligible: set[str] = set()
+            if not repo.conflicts() and not repo.problems():
+                groups: dict[str, list[str]] = {}
+                for change in repo.pending():
+                    groups.setdefault(change.group_id, []).append(change.change_id)
+                now = self._clock.now()
+                for ids in groups.values():
+                    if all(
+                        (not_before := repo.publication(identifier).not_before) is None
+                        or not_before <= now
+                        for identifier in ids
+                    ):
+                        eligible.update(ids)
+            return SyncScheduleState((target, generation), frozenset(eligible))
 
     def _review_service(self) -> SyncService:
         configuration, target, generation = self._binding()

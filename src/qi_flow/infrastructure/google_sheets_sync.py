@@ -7,6 +7,8 @@ import importlib
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from time import monotonic
 from typing import Any
 from urllib.parse import urlparse
@@ -15,9 +17,11 @@ from qi_flow.application.google_sync import GoogleSyncConfiguration
 from qi_flow.application.google_sync_service import GoogleSyncUpgradeRequiredError
 from qi_flow.application.sync_migration import fingerprint
 from qi_flow.application.sync_models import (
+    SyncAuthorizationRequiredError,
     SyncChange,
     SyncJobCancelledError,
     SyncProblem,
+    SyncRetryError,
     SyncTarget,
     canonical_json,
     parse_json,
@@ -28,6 +32,37 @@ from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 _TAB = "QI_FLOW_SYNC_V1"
 _V2_TAB = "QI_FLOW_SYNC_V2"
 _MIGRATION_TAB = "QI_FLOW_MIGRATION_V2"
+
+
+def _request_failure(error: Exception) -> Exception:
+    """Never expose a dependency's URI or response body to operational status."""
+    response = getattr(error, "resp", None)
+    status = getattr(response, "status", None)
+    quota = False
+    if status == 403:
+        try:
+            reasons = json.loads(getattr(error, "content", b"{}"))["error"].get("errors", [])
+            quota = any(
+                item.get("reason") in {"rateLimitExceeded", "userRateLimitExceeded"}
+                for item in reasons
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            pass
+    if status == 401 or (status == 403 and not quota):
+        return SyncAuthorizationRequiredError(
+            "Check this computer's authorization and Sheet access."
+        )
+    if status == 429 or quota or (type(status) is int and 500 <= status <= 599):
+        raw = response.get("retry-after", "0") if response is not None else "0"
+        try:
+            delay = float(raw)
+        except (ValueError, TypeError):
+            try:
+                delay = (parsedate_to_datetime(str(raw)) - datetime.now(UTC)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                delay = 0.0
+        return SyncRetryError(max(0.0, delay) if math.isfinite(delay) else 0.0)
+    return error
 
 
 class _GuardedApi:
@@ -41,7 +76,13 @@ class _GuardedApi:
 
         def call(*args: Any, **kwargs: Any) -> Any:
             self._check()
-            result = method(*args, **kwargs)
+            try:
+                result = method(*args, **kwargs)
+            except Exception as error:
+                failure = _request_failure(error)
+                if failure is error:
+                    raise
+                raise failure from error
             self._check()
             return result if name == "execute" else _GuardedApi(result, self._check)
 

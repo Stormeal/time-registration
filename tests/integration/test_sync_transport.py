@@ -21,6 +21,43 @@ class Clock:
         return NOW
 
 
+@pytest.mark.parametrize("status,delay", [(429, "900"), (503, "60")])
+def test_http_retry_after_is_sanitized_and_not_retried_inside_request(status, delay):
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+
+    from qi_flow.application.sync_models import SyncRetryError
+
+    sheet = Sheets()
+    attempts = []
+
+    def get(**kwargs):
+        def execute():
+            attempts.append(1)
+            raise HttpError(
+                Response({"status": str(status), "retry-after": delay}),
+                b'{"error":{"message":"private request contents"}}',
+                uri="https://example.invalid/private-sheet",
+            )
+
+        return Request(execute)
+
+    sheet.get = get
+    adapter = GoogleSheetsSync(
+        GoogleSyncConfiguration(
+            "https://docs.google.com/spreadsheets/d/sheet/edit", "test.apps.googleusercontent.com"
+        ),
+        None,
+        target=TARGET,
+        service_factory=lambda: sheet,
+    )
+    with pytest.raises(SyncRetryError) as raised:
+        adapter.read_changes()
+    assert raised.value.retry_after == float(delay)
+    assert "private" not in str(raised.value)
+    assert attempts == [1]
+
+
 def test_cancellation_between_google_requests_stops_before_another_api_call():
     from threading import Event
 

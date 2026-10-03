@@ -93,7 +93,9 @@ Acceptance criteria:
 Implementation status: **In progress** · unsafe V1 snapshot writes are contained. Durable atomic
 capture, append/readback transport, causal aggregate reconciliation, explicit conflict resolution,
 and production runtime wiring for A01–A04 pass automated acceptance in the 609-test quality gate.
-Manual V2 publication is enabled only after reviewed migration; automatic scheduling remains.
+V2 sync is enabled only after reviewed migration. Opening, eligible committed changes and five-minute
+checks share one cancellable worker; failed jobs back off and retain pending changes. The 626-test
+gate covers scheduling and connection invalidation. Live multi-client and release acceptance remain.
 
 As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 

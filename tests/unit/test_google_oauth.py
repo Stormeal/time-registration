@@ -181,7 +181,7 @@ def test_refresh_uses_bounded_http_request(rig, monkeypatch):
     import google.oauth2.credentials
 
     store, _, values, _, _, _ = rig
-    values["refresh-token"] = "{}"
+    values["refresh-token"] = json.dumps({"client_id": "test.apps.googleusercontent.com"})
     observed = []
 
     class Request:
@@ -206,6 +206,39 @@ def test_refresh_uses_bounded_http_request(rig, monkeypatch):
     monkeypatch.setattr(google.auth.transport.requests, "Request", Request)
     store.credentials()
     assert 0 < observed[0]["timeout"] <= 15
+
+
+def test_changed_oauth_client_requires_renewed_authorization(rig):
+    from qi_flow.application.sync_models import SyncAuthorizationRequiredError
+
+    store, _, values, _, _, _ = rig
+    values["refresh-token"] = json.dumps({"client_id": "test.apps.googleusercontent.com"})
+    assert store.is_authorized()
+    store.save_client("different.apps.googleusercontent.com", "synthetic-new-secret")
+    assert not store.is_authorized()
+    with pytest.raises(SyncAuthorizationRequiredError):
+        store.credentials()
+    assert json.loads(values["refresh-token"])["client_id"] == "test.apps.googleusercontent.com"
+
+
+def test_configured_client_must_match_credential_manager_setup(rig):
+    _, _, values, _, _, _ = rig
+    values["refresh-token"] = json.dumps({"client_id": "test.apps.googleusercontent.com"})
+    store = GoogleOAuthStore(client_id=lambda: "different.apps.googleusercontent.com")
+    assert not store.is_authorized()
+
+
+def test_client_setup_changed_during_exchange_cannot_store_old_tokens(rig):
+    store, flow, values, _, callback, _ = rig
+    callback()
+
+    def exchange(**kwargs):
+        store.save_client("different.apps.googleusercontent.com", "synthetic")
+
+    flow.fetch_token = exchange
+    with pytest.raises(SyncJobCancelledError, match="setup changed"):
+        store.authorize(timeout_seconds=2)
+    assert values["refresh-token"] == "previous-valid-token"
 
 
 def test_sheet_service_uses_bounded_authenticated_http(monkeypatch):

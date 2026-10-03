@@ -144,3 +144,39 @@ def test_configuration_change_invalidates_cached_review_service(rig):
     settings.disable()
     with pytest.raises(ValueError, match="migration"):
         actions.resolve("one", frozenset(), {})
+
+
+def test_schedule_requires_review_and_authorization_and_whole_group_grace(rig):
+    actions, factory, _, oauth, _, _, enable = rig
+    assert actions.schedule_state().binding is None
+    enable()
+    group = finalize_group(
+        tuple(
+            SyncChange(
+                identifier,
+                2,
+                "day_details",
+                day,
+                (),
+                "group",
+                (),
+                "",
+                {},
+                "upsert",
+                {"location": "office", "note": "", "revision": 1},
+                NOW,
+                "device",
+            )
+            for identifier, day in (("one", "2026-10-01"), ("two", "2026-10-02"))
+        )
+    )
+    with factory() as uow:
+        repo = uow.sync_for(TARGET)
+        repo.enqueue(group)
+        repo.defer(["two"], NOW + timedelta(seconds=30))
+    assert actions.schedule_state().eligible_ids == frozenset()
+    with factory() as uow:
+        uow.sync_for(TARGET).defer(["two"], NOW)
+    assert actions.schedule_state().eligible_ids == frozenset({"one", "two"})
+    oauth.authorized = False
+    assert actions.schedule_state().binding is None

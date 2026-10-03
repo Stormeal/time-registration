@@ -27,6 +27,7 @@ from qi_flow.application.google_sync_service import (
 from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.sync_migration import SyncMigration
 from qi_flow.application.sync_models import SyncTarget
+from qi_flow.application.sync_schedule import SyncSchedule
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
@@ -47,7 +48,7 @@ from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
 from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.exit_dialog import ExitCoordinator
-from qi_flow.ui.google_sync_controller import GoogleSyncController
+from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.tray import TrayController
 
@@ -179,7 +180,12 @@ def run(argv: list[str] | None = None) -> int:
     )
     google_controller = GoogleSyncController(app)
     google_settings = GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock())
-    google_oauth = GoogleOAuthStore()
+
+    def configured_client_id() -> str | None:
+        configuration = google_settings.load()
+        return configuration.oauth_client_id if configuration is not None else None
+
+    google_oauth = GoogleOAuthStore(client_id=configured_client_id)
 
     def sync_factory(
         configuration: GoogleSyncConfiguration,
@@ -219,6 +225,9 @@ def run(argv: list[str] | None = None) -> int:
         sync_factory,
         migration_factory,
     )
+    automatic_sync = AutomaticSyncController(
+        sync_actions, google_controller, SyncSchedule(SystemClock()), app
+    )
 
     window = MainWindow(
         service,
@@ -254,7 +263,7 @@ def run(argv: list[str] | None = None) -> int:
         app.quit()
 
     google_controller.ready_for_shutdown.connect(finish_exit)
-    exit_coordinator.exit_confirmed.connect(google_controller.begin_shutdown)
+    exit_coordinator.exit_confirmed.connect(automatic_sync.begin_shutdown)
     window.close_app_requested.connect(exit_coordinator.request_exit)
 
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -288,6 +297,7 @@ def run(argv: list[str] | None = None) -> int:
             "setup.",
         )
     exit_code = app.exec()
+    automatic_sync.begin_shutdown()
     google_controller.wait_for_shutdown()
     if tray is not None:
         tray.hide()

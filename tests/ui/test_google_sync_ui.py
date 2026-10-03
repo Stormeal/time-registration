@@ -248,6 +248,146 @@ def test_shutdown_cancels_authorization_waits_for_worker_and_discards_late_resul
     assert not controller.start("sync", operation)
 
 
+def test_obsolete_connection_result_is_discarded_on_delivery(qtbot):
+    import threading
+
+    from qi_flow.ui.google_sync_controller import GoogleSyncController
+
+    controller = GoogleSyncController()
+    release = threading.Event()
+    current = [1]
+    deliveries = []
+    controller.completed.connect(lambda *args: deliveries.append(args))
+    controller.failed.connect(lambda *args: deliveries.append(args))
+
+    def operation(cancelled):
+        release.wait(2)
+        return "old connection status"
+
+    assert controller.start("sync", operation, valid=lambda: current[0] == 1)
+    current[0] = 2
+    release.set()
+    qtbot.waitUntil(lambda: not controller.busy)
+    assert deliveries == []
+
+
+def test_automatic_sync_coalesces_commits_and_stops_on_close(qtbot):
+    import threading
+
+    from qi_flow.application.sync_models import SyncTarget
+    from qi_flow.application.sync_schedule import SyncSchedule, SyncScheduleState
+    from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
+
+    class Clock:
+        def now(self):
+            return datetime(2026, 10, 3, 12, tzinfo=UTC)
+
+    class Actions:
+        state = SyncScheduleState((SyncTarget("sheet", "log"), 1), frozenset({"one"}))
+        calls = 0
+
+        def schedule_state(self):
+            return self.state
+
+        def synchronize(self, cancelled):
+            self.calls += 1
+            assert release.wait(2)
+            return None
+
+    actions, release = Actions(), threading.Event()
+    worker = GoogleSyncController()
+    auto = AutomaticSyncController(actions, worker, SyncSchedule(Clock()))
+    qtbot.waitUntil(lambda: actions.calls == 1)
+    actions.state = SyncScheduleState(actions.state.binding, frozenset({"two", "three"}))
+    auto.poll()
+    auto.poll()
+    assert actions.calls == 1
+    release.set()
+    qtbot.waitUntil(lambda: not worker.busy)
+    auto.poll()
+    qtbot.waitUntil(lambda: actions.calls == 2 and not worker.busy)
+    actions.state = SyncScheduleState(actions.state.binding)
+    auto.poll()
+    assert actions.calls == 2
+    auto.begin_shutdown()
+    auto.poll()
+    assert actions.calls == 2
+
+
+def test_automatic_sync_obsoletes_inflight_connection_and_retains_new_work(qtbot):
+    import threading
+
+    from qi_flow.application.sync_models import SyncTarget
+    from qi_flow.application.sync_schedule import SyncSchedule, SyncScheduleState
+    from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
+
+    class Clock:
+        def now(self):
+            return datetime(2026, 10, 3, 12, tzinfo=UTC)
+
+    class Actions:
+        state = SyncScheduleState((SyncTarget("sheet", "log"), 1), frozenset({"pending"}))
+        calls = 0
+
+        def schedule_state(self):
+            return self.state
+
+        def synchronize(self, cancelled):
+            self.calls += 1
+            if self.calls == 1:
+                while not cancelled():
+                    threading.Event().wait(0.01)
+            return None
+
+    actions, worker = Actions(), GoogleSyncController()
+    results = []
+    worker.completed.connect(lambda *args: results.append(args))
+    worker.failed.connect(lambda *args: results.append(args))
+    auto = AutomaticSyncController(actions, worker, SyncSchedule(Clock()))
+    qtbot.waitUntil(lambda: actions.calls == 1)
+    actions.state = SyncScheduleState((SyncTarget("new-sheet", "new-log"), 2))
+    auto.poll()
+    qtbot.waitUntil(lambda: not worker.busy)
+    assert results == []
+    auto.poll()
+    qtbot.waitUntil(lambda: actions.calls == 2 and not worker.busy)
+    assert len(results) == 1
+    auto.begin_shutdown()
+
+
+def test_oauth_setup_cannot_change_during_authorization(qtbot, rig):
+    import threading
+
+    from qi_flow.application.google_sync import GoogleSyncSettings
+    from qi_flow.ui.settings_page import SettingsPage
+
+    class OAuth:
+        def is_authorized(self):
+            return False
+
+        def authorize(self, *, cancelled, timeout_seconds):
+            started.set()
+            while not cancelled():
+                threading.Event().wait(0.01)
+
+    started = threading.Event()
+    page = SettingsPage(
+        *rig.window_args, google_sync=GoogleSyncSettings(rig.uow, rig.clock), google_oauth=OAuth()
+    )
+    qtbot.addWidget(page)
+    page._google_auth_button.click()
+    qtbot.waitUntil(started.is_set)
+    try:
+        assert not page._sync_sheet_url.isEnabled()
+        assert not page._sync_client_id.isEnabled()
+        assert not page._sync_client_secret.isEnabled()
+        assert not page._sync_save.isEnabled()
+        assert not page._save_client_button.isEnabled()
+    finally:
+        page._google_controller.cancel()
+        qtbot.waitUntil(lambda: not page._google_controller.busy)
+
+
 def test_cancelled_operation_reports_once_on_main_thread(qtbot):
     import threading
 

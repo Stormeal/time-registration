@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
@@ -83,6 +83,36 @@ class TesthusetCredentialStore(Protocol):
     def save(self, credential: TesthusetCredential) -> None: ...
 
     def clear(self) -> None: ...
+
+
+def completed_segments(uow: UnitOfWork, week: IsoWeek) -> Iterator[tuple[WorkSession, date, int]]:
+    """Allocate completed net seconds once; destination filtering precedes rounding."""
+    monday = date.fromisocalendar(week.year, week.week, 1)
+    start = datetime.combine(monday, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+    end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), COPENHAGEN).astimezone(
+        UTC
+    )
+    for session in uow.sessions.list_intersecting(
+        start - timedelta(minutes=15), end + timedelta(minutes=15)
+    ):
+        if session.deleted_at is not None or session.is_active:
+            continue
+        left = session.effective_started_at or session.actual_started_at
+        right = session.effective_ended_at or session.actual_ended_at
+        if right is None or left >= end or right <= start:
+            continue
+        deductions = uow.deductions.list_for_session(session.id)
+        for a, b in split_at_local_midnight(max(left, start), min(right, end)):
+            seconds = int((b - a).total_seconds())
+            for deduction in deductions:
+                if deduction.deleted_at is not None:
+                    continue
+                dstart = deduction.effective_started_at or deduction.actual_started_at
+                dend = deduction.effective_ended_at or deduction.actual_ended_at
+                if dend is None:
+                    raise ValueError("Resolve unfinished deductions before filling.")
+                seconds -= max(0, int((min(b, dend) - max(a, dstart)).total_seconds()))
+            yield session, a.astimezone(COPENHAGEN).date(), seconds
 
 
 class TesthusetService:
@@ -172,10 +202,6 @@ class TesthusetService:
         return tasks
 
     def proposed_slots(self, week: IsoWeek) -> tuple[HourSlot, ...]:
-        monday = date.fromisocalendar(week.year, week.week, 1)
-        start = datetime.combine(monday, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), COPENHAGEN)
-        end = end.astimezone(UTC)
         tasks = {task.id: task for task in self.tasks()}
         default = self.default_task_id()
         if default not in tasks:
@@ -185,34 +211,12 @@ class TesthusetService:
             )
         totals: dict[tuple[date, str], int] = {}
         with self._uow_factory() as uow:
-            # Include the rounding margin at week boundaries, then clip effective intervals.
-            for session in uow.sessions.list_intersecting(
-                start - timedelta(minutes=15), end + timedelta(minutes=15)
-            ):
-                left = session.effective_started_at or session.actual_started_at
-                right = session.effective_ended_at or session.actual_ended_at
-                # A running session has no stable net duration. It must not block
-                # registration of already completed sessions from earlier days.
-                if right is None:
-                    continue
-                if left >= end or right <= start:
-                    continue
+            for session, day, seconds in completed_segments(uow, week):
                 task_id = getattr(session, self._assignment_attribute) or default
                 if task_id not in tasks:
                     raise ValueError("A session uses a removed task. Choose a current override.")
-                deductions = uow.deductions.list_for_session(session.id)
-                for a, b in split_at_local_midnight(max(left, start), min(right, end)):
-                    seconds = int((b - a).total_seconds())
-                    for deduction in deductions:
-                        if deduction.deleted_at is not None:
-                            continue
-                        dstart = deduction.effective_started_at or deduction.actual_started_at
-                        dend = deduction.effective_ended_at or deduction.actual_ended_at
-                        if dend is None:
-                            raise ValueError("Resolve unfinished deductions before filling.")
-                        seconds -= max(0, int((min(b, dend) - max(a, dstart)).total_seconds()))
-                    key = (a.astimezone(COPENHAGEN).date(), task_id)
-                    totals[key] = totals.get(key, 0) + seconds
+                key = day, task_id
+                totals[key] = totals.get(key, 0) + seconds
         return tuple(
             HourSlot(day, tasks[task_id], decimal_hours(seconds))
             for (day, task_id), seconds in sorted(totals.items())

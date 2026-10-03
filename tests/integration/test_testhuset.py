@@ -229,7 +229,8 @@ def test_uncertain_save_stops_without_retry(setup) -> None:
 def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
     tracking, _, _, database, cache = setup
     ids = UuidIdentifierGenerator()
-    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache, testhuset_cache=cache)
+    dsb.set_included_branches({TASK.id})
     sheet = DsbSheet()
     dsb.scan(sheet, WEEK)
     dsb.set_default(TASK.id)
@@ -247,7 +248,8 @@ def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
 def test_dsb_preview_uses_the_cached_allocation_without_rescanning(setup) -> None:
     tracking, _, _, database, cache = setup
     ids = UuidIdentifierGenerator()
-    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache, testhuset_cache=cache)
+    dsb.set_included_branches({TASK.id})
     sheet = DsbSheet()
     dsb.scan(sheet, WEEK)
     dsb.set_default(TASK.id)
@@ -258,6 +260,36 @@ def test_dsb_preview_uses_the_cached_allocation_without_rescanning(setup) -> Non
 
     assert len(preview.slots) == 1
     assert sheet.weeks == []
+
+
+def test_dsb_filters_before_rounding_and_preserves_testhuset_net_totals(setup):
+    tracking, testhuset, _, database, cache = setup
+    dsb = DsbService(
+        lambda: SQLiteUnitOfWork(database),
+        Clock(),
+        UuidIdentifierGenerator(),
+        cache,
+        testhuset_cache=cache,
+    )
+    dsb.set_default(TASK.id)
+    dsb.set_included_branches({TASK.id})
+    for minute in (0, 5):
+        session = tracking.add_manual_session(
+            ManualWorkSessionCommand(stamp(14, 7, minute), stamp(14, 7, minute + 3))
+        )
+        tracking.add_manual_deduction(
+            ManualDeductionCommand(
+                session.id, DeductionKind.LUNCH, stamp(14, 7, minute + 1), stamp(14, 7, minute + 2)
+            )
+        )
+    excluded = tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 8), stamp(14, 9)))
+    testhuset.assign(excluded.id, OTHER.id)
+    assert dsb.proposed_slots(WEEK) == (HourSlot(date(2026, 9, 14), TASK, "0.07"),)
+    assert [(slot.task.id, slot.hours) for slot in testhuset.proposed_slots(WEEK)] == [
+        (TASK.id, "0.07"),
+        (OTHER.id, "1.00"),
+    ]
+    assert dsb.coverage(WEEK).excluded_seconds == 3600
 
 
 def test_upgrade_preserves_existing_sessions(tmp_path: Path) -> None:

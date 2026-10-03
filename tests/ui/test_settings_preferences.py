@@ -13,6 +13,36 @@ def build_page(rig, qtbot):
     return page
 
 
+def test_dsb_branch_selection_persists_scanned_stable_ids_with_no_name_defaults(
+    qtbot, rig, tmp_path
+):
+    from PySide6.QtCore import Qt
+
+    from qi_flow.application.dsb import DsbService
+    from qi_flow.domain.testhuset import ProjectTask
+    from qi_flow.infrastructure.system import UuidIdentifierGenerator
+    from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
+
+    tasks = (
+        ProjectTask("11-22", "Team Web, DSB", "Teknisk Tester"),
+        ProjectTask("33-44", "Internal", "Planning"),
+    )
+    cache = JsonTaskCache(tmp_path / "branches.json")
+    cache.replace(tasks)
+    dsb = DsbService(rig.uow, rig.clock, UuidIdentifierGenerator(), cache, testhuset_cache=cache)
+    page = SettingsPage(*rig.window_args, dsb=dsb, dsb_sheet_factory=lambda: None)
+    qtbot.addWidget(page)
+    assert page._dsb_branches.count() == 2
+    assert all(page._dsb_branches.item(i).checkState() == Qt.CheckState.Unchecked for i in range(2))
+    page._dsb_branches.item(0).setCheckState(Qt.CheckState.Checked)
+    page._save_dsb_branches_button.click()
+    assert dsb.included_branches() == frozenset({tasks[0].id})
+    reopened = SettingsPage(*rig.window_args, dsb=dsb, dsb_sheet_factory=lambda: None)
+    qtbot.addWidget(reopened)
+    assert reopened._dsb_branches.item(0).checkState() == Qt.CheckState.Checked
+    assert reopened._dsb_branches.item(1).checkState() == Qt.CheckState.Unchecked
+
+
 def test_settings_saves_both_reminder_thresholds_and_enable_flags(qtbot, rig):
     page = build_page(rig, qtbot)
     assert hasattr(page, "_work_reminder_minutes"), "Relocated reminders need editable thresholds"

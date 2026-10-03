@@ -222,8 +222,11 @@ def test_rejected_reordering_during_fill_never_sends(edge_page, tmp_path, monkey
     slot = _slot(date(2026, 9, 14), "Allocation B")
     cache.replace((slot.task,))
     tracking = TimeTrackingApplicationService(uow, Clock(), ids)
-    dsb = DsbService(uow, Clock(), ids, cache)
+    dsb = DsbService(uow, Clock(), ids, cache, testhuset_cache=cache)
     dsb.set_default(slot.task.id)
+    dsb.set_included_branches({slot.task.id})
+    with uow() as unit:
+        unit.settings.save("testhuset_default_task", slot.task.id, Clock().now())
     tracking.add_manual_session(
         ManualWorkSessionCommand(
             datetime(2026, 9, 14, 7, tzinfo=UTC), datetime(2026, 9, 14, 10, tzinfo=UTC)

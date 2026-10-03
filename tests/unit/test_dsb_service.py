@@ -56,9 +56,15 @@ def setup():
         )
         for day in (14, 15, 16, 17)
     ]
-    settings = {"dsb_default_task": TASK.id}
+    settings = {
+        "dsb_default_task": TASK.id,
+        "testhuset_default_task": TASK.id,
+        "dsb_included_testhuset_tasks": [TASK.id],
+    }
     ports = SimpleNamespace(
-        settings=SimpleNamespace(get=settings.get),
+        settings=SimpleNamespace(
+            get=settings.get, save=lambda key, value, now: settings.__setitem__(key, value)
+        ),
         sessions=SimpleNamespace(list_intersecting=lambda start, end: sessions),
         deductions=SimpleNamespace(list_for_session=lambda session_id: []),
     )
@@ -69,8 +75,73 @@ def setup():
 
     clock = SimpleNamespace(now=lambda: datetime(2026, 11, 1, tzinfo=UTC))
     cache = SimpleNamespace(load=lambda: (TASK, OTHER))
-    service = DsbService(uow, clock, SimpleNamespace(), cache)
+    service = DsbService(uow, clock, SimpleNamespace(), cache, testhuset_cache=cache)
     return service, Sheet(), sessions, settings
+
+
+def test_only_included_resolved_branches_contribute_and_exclusions_remain_inspectable(setup):
+    service, sheet, sessions, _ = setup
+    sessions[0].testhuset_task_id = TASK.id
+    sessions[1].testhuset_task_id = OTHER.id
+    sessions[2].testhuset_task_id = "99-99"
+    preview = service.preview(sheet, WEEK)
+    assert [(item.proposed.work_date.day, item.proposed.hours) for item in preview.slots] == [
+        (14, "8.00"),
+        (17, "8.00"),
+    ]
+    assert preview.coverage.included_seconds == 16 * 3600
+    assert preview.coverage.excluded_seconds == 16 * 3600
+    excluded = [entry for entry in preview.coverage.entries if not entry.included]
+    assert [(entry.work_date.day, entry.branch_id, entry.reason) for entry in excluded] == [
+        (15, OTHER.id, "not_included"),
+        (16, "99-99", "unresolved"),
+    ]
+    assert len(sessions) == 4  # Filtering never changes local history.
+
+
+def test_empty_allowlist_blocks_before_any_external_read_or_write(setup):
+    service, sheet, _, settings = setup
+    settings["dsb_included_testhuset_tasks"] = []
+    with pytest.raises(ValueError, match=r"Include.*branch"):
+        service.preview(sheet, WEEK)
+    assert sheet.reads == sheet.attempts == []
+    assert sheet.commits == 0
+
+
+def test_allowlist_version_change_invalidates_even_identical_rounded_totals(setup):
+    service, sheet, _, _ = setup
+    preview = service.preview(sheet, WEEK)
+    service.set_included_branches({TASK.id, OTHER.id})
+    with pytest.raises(ValueError, match="changed"):
+        service.fill(
+            sheet,
+            preview,
+            {0: FillDecision.REPLACE, 1: FillDecision.KEEP, 3: FillDecision.KEEP},
+            confirmed=True,
+        )
+    assert sheet.attempts == []
+
+
+def test_active_deleted_and_unassigned_sessions_are_excluded(setup):
+    service, _, sessions, settings = setup
+    settings.pop("testhuset_default_task")
+    sessions[0].testhuset_task_id = TASK.id
+    sessions[1].actual_ended_at = None
+    sessions[2].deleted_at = datetime(2026, 10, 1, tzinfo=UTC)
+    coverage = service.coverage(WEEK)
+    assert coverage.included_seconds == 8 * 3600
+    assert coverage.excluded_seconds == 8 * 3600
+    assert coverage.entries[-1].reason == "unresolved"
+
+
+def test_selection_uses_scanned_ids_and_never_infers_project_names(setup):
+    service, _, _, settings = setup
+    settings.pop("dsb_included_testhuset_tasks")
+    assert service.included_branches() == frozenset()
+    with pytest.raises(ValueError, match="scanned"):
+        service.set_included_branches({"88-88"})
+    service.set_included_branches({OTHER.id})
+    assert settings["dsb_included_testhuset_tasks"] == [OTHER.id]
 
 
 @pytest.mark.parametrize(

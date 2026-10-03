@@ -136,7 +136,9 @@ Acceptance criteria:
 
 ### US31 — Exclude non-DSB branches from DSB hours · P1
 
-Implementation status: **Not started**.
+Implementation status: **In progress** · scanned stable-ID branch selection, resolved assignment
+filtering, included/excluded inspection and stale-review invalidation pass automated acceptance in
+the 634-test quality gate. Live reviewed DSB and packaged release acceptance remain.
 
 As a consultant who sometimes works on internal Testhuset activities, I want to choose which
 Testhuset project/task branches count as DSB work so that QI Flow inserts only DSB-related hours

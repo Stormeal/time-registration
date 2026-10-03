@@ -37,8 +37,18 @@ def build(tmp_path, service_type=TesthusetService):
     task = ProjectTask("11-22", "Example", "Testing")
     cache.replace((task,))
     ids = UuidIdentifierGenerator()
-    service = service_type(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    service = service_type(
+        lambda: SQLiteUnitOfWork(database),
+        Clock(),
+        ids,
+        cache,
+        **({"testhuset_cache": cache} if service_type is DsbService else {}),
+    )
     service.set_default(task.id)
+    if isinstance(service, DsbService):
+        service.set_included_branches({task.id})
+        with SQLiteUnitOfWork(database) as uow:
+            uow.settings.save("testhuset_default_task", task.id, Clock().now())
     tracking = TimeTrackingApplicationService(lambda: SQLiteUnitOfWork(database), Clock(), ids)
     session = tracking.add_manual_session(
         ManualWorkSessionCommand(
@@ -66,6 +76,33 @@ def test_hidden_seconds_are_not_saved_from_minute_only_editors(qtbot, tmp_path) 
     saved = tracking.completed_sessions_for_day(date(2026, 9, 16))[0]
     assert saved.actual_started_at == datetime(2026, 9, 16, 12, tzinfo=UTC)
     assert saved.actual_ended_at == datetime(2026, 9, 16, 16, tzinfo=UTC)
+
+
+def test_fully_excluded_dsb_week_is_inspectable_and_cannot_be_filled(qtbot, tmp_path):
+    service, _, session, _ = build(tmp_path, DsbService)
+    # Make the existing session unresolved; the selected branch remains an explicit opt-in.
+    with service._uow_factory() as uow:
+        current = uow.sessions.get(session.id)
+        current.testhuset_task_id = "99-99"
+        uow.sessions.save(current)
+
+    class Sheet:
+        def read(self, slot):
+            raise AssertionError("Excluded hours must never read a destination slot")
+
+    @contextmanager
+    def factory(cancelled, status):
+        yield Sheet()
+
+    dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._coverage_table.rowCount() == 1)
+    assert not dialog._fill.isEnabled()
+    assert dialog._table.rowCount() == 0
+    assert "7.75" in dialog._coverage_status.text()
+    assert "Unresolved" in dialog._coverage_table.item(0, 1).text()
+    dialog.reject()
+    qtbot.waitUntil(lambda: not dialog._worker.isRunning())
 
 
 def test_override_save_is_independent_of_time_correction(qtbot, tmp_path) -> None:

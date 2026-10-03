@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QDate, QProcess, QSize, QThread, Signal
+from PySide6.QtCore import QCoreApplication, QDate, QProcess, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
@@ -572,6 +574,23 @@ class SettingsPage(QWidget):
                     save,
                 )
             )
+            self._dsb_branches = QListWidget()
+            self._dsb_branches.setAccessibleName("Included in DSB hours")
+            self._save_dsb_branches_button = QPushButton("Save included branches")
+            self._save_dsb_branches_button.clicked.connect(self._save_dsb_branches)
+            branches_form = QFormLayout()
+            branches_form.addRow("Included in DSB hours", self._dsb_branches)
+            workplace_layout.addWidget(
+                self._settings_group(
+                    "DSB work branches",
+                    "Select Testhuset branches from the latest scan. "
+                    "No branch is included automatically; "
+                    "unresolved assignments are excluded from DSB hours.",
+                    branches_form,
+                    self._save_dsb_branches_button,
+                )
+            )
+            self._refresh_dsb_branches()
             self._refresh_dsb()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -761,6 +780,44 @@ class SettingsPage(QWidget):
             self._dsb_default.setCurrentIndex(max(0, index))
         except (OSError, ValueError):
             self._dsb_default.setItemText(0, "Allocation cache unavailable — scan again")
+
+    def _refresh_dsb_branches(self) -> None:
+        if self._dsb is None or not hasattr(self, "_dsb_branches"):
+            return
+        self._dsb_branches.clear()
+        try:
+            selected = self._dsb.included_branches()
+            tasks = self._dsb.branch_tasks()
+            labels = {task.id: task.label for task in tasks}
+            for identifier in sorted(labels.keys() | selected):
+                row = QListWidgetItem(
+                    labels.get(
+                        identifier, f"Previously included {identifier} (not in current scan)"
+                    )
+                )
+                row.setData(Qt.ItemDataRole.UserRole, identifier)
+                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                row.setCheckState(
+                    Qt.CheckState.Checked if identifier in selected else Qt.CheckState.Unchecked
+                )
+                self._dsb_branches.addItem(row)
+            self._save_dsb_branches_button.setEnabled(True)
+        except (OSError, ValueError):
+            self._dsb_branches.addItem("Testhuset task cache unavailable — scan again")
+            self._save_dsb_branches_button.setEnabled(False)
+
+    def _save_dsb_branches(self) -> None:
+        if self._dsb is None:
+            return
+        selected = {
+            str(self._dsb_branches.item(i).data(Qt.ItemDataRole.UserRole))
+            for i in range(self._dsb_branches.count())
+            if self._dsb_branches.item(i).checkState() == Qt.CheckState.Checked
+        }
+        try:
+            self._dsb.set_included_branches(selected)
+        except (OSError, ValueError) as error:
+            self._show_error("Could not save DSB branches", str(error))
 
     def _save_google_sync(self) -> None:
         if self._google_sync is None or self._google_controller.busy:
@@ -1118,6 +1175,7 @@ class SettingsPage(QWidget):
         dialog = TesthusetDialog(self._testhuset, self._sheet_factory, week, scan_only=True)
         dialog.exec()
         self._refresh_testhuset()
+        self._refresh_dsb_branches()
 
     def _save_testhuset_default(self) -> None:
         if self._testhuset is None:

@@ -177,6 +177,7 @@ def run(argv: list[str] | None = None) -> int:
         SystemClock(),
         UuidIdentifierGenerator(),
         JsonTaskCache(context.paths.data_dir / "dsb-allocations.json"),
+        testhuset_cache=JsonTaskCache(context.paths.data_dir / "testhuset-projects.json"),
     )
     google_controller = GoogleSyncController(app)
     google_settings = GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock())

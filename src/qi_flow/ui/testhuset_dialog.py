@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from qi_flow.application.dsb import DsbPreview
 from qi_flow.application.testhuset import (
     FillDecision,
     FillDecisions,
@@ -27,6 +28,7 @@ from qi_flow.application.testhuset import (
     WeeklySheet,
 )
 from qi_flow.domain.models import IsoWeek
+from qi_flow.domain.testhuset import decimal_hours
 
 SheetFactory = Callable[[Event, Callable[[str], None]], AbstractContextManager[WeeklySheet]]
 _LOG = logging.getLogger(__name__)
@@ -119,6 +121,15 @@ class TesthusetDialog(QDialog):
             ("Date", "Project / task", "QI Flow hours", f"{service.destination} hours", "Decision")
         )
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._coverage_status = QLabel()
+        self._coverage_status.setWordWrap(True)
+        self._coverage_table = QTableWidget(0, 4)
+        self._coverage_table.setHorizontalHeaderLabels(
+            ("Date", "Testhuset branch", "Net hours", "DSB inclusion")
+        )
+        self._coverage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._coverage_status.hide()
+        self._coverage_table.hide()
         self._fill = QPushButton(f"Fill {service.destination} timesheet")
         self._fill.setEnabled(False)
         self._fill.setToolTip("The weekly review is loading.")
@@ -136,11 +147,35 @@ class TesthusetDialog(QDialog):
         buttons.addWidget(self._cancel)
         layout = QVBoxLayout(self)
         layout.addWidget(self._status)
+        layout.addWidget(self._coverage_status)
+        layout.addWidget(self._coverage_table)
         layout.addWidget(self._table)
         layout.addLayout(buttons)
         self._worker.start()
 
     def _preview(self, preview: FillPreview) -> None:
+        if isinstance(preview, DsbPreview):
+            coverage = preview.coverage
+            self._coverage_status.setText(
+                f"Included DSB hours: {decimal_hours(coverage.included_seconds)}. "
+                f"Excluded hours: {decimal_hours(coverage.excluded_seconds)}. "
+                "Review exclusions and unresolved assignments before sending."
+            )
+            self._coverage_table.setRowCount(len(coverage.entries))
+            for row, entry in enumerate(coverage.entries):
+                values = (
+                    entry.work_date.strftime("%d/%m/%Y"),
+                    entry.branch.label
+                    if entry.branch
+                    else f"Unresolved assignment ({entry.branch_id or 'none'})",
+                    decimal_hours(entry.seconds),
+                    "Included" if entry.included else "Excluded",
+                )
+                for column, value in enumerate(values):
+                    self._coverage_table.setItem(row, column, QTableWidgetItem(value))
+            self._coverage_table.resizeColumnsToContents()
+            self._coverage_status.show()
+            self._coverage_table.show()
         self._status.setText(
             "Review every differing slot, then confirm the fill. Only listed slots are affected. "
             "Closing the week remains manual."
@@ -171,7 +206,7 @@ class TesthusetDialog(QDialog):
         self._validate_choices()
 
     def _validate_choices(self) -> None:
-        can_fill = all(
+        can_fill = self._table.rowCount() > 0 and all(
             isinstance(choice.currentData(), FillDecision) for choice in self._choices.values()
         )
         self._fill.setEnabled(can_fill)

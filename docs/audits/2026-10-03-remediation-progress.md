@@ -142,7 +142,7 @@ part of Task 19 before final lifecycle acceptance.
 | 5 — Exact DSB row | A09; US30 | Complete; 29 focused tests, review and integrated gate pass; live DSB check remains open. |
 | 6 — Explicit row choices | A18; US45 | Complete code; 93 focused tests, review and integrated gate pass; destination release checks remain open. |
 | 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Automated implementation acceptance and integrated gates passed through Task 13. V2 sync requires verified migration; V1 sync refuses snapshot writes. Live multi-client and release checks remain. |
-| 14 — DSB allowlist | US31 | Pending. |
+| 14 — DSB allowlist | US31 | Automated acceptance and 634-test gate passed; live reviewed fill/release acceptance remains. |
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |
 | 17 — Reminder identity | A15; US02, US14 | Complete; independent timers and stale-dialog guards pass 57 focused tests and the integrated gate. |
@@ -151,6 +151,16 @@ part of Task 19 before final lifecycle acceptance.
 | 20 — Windows and integration release gates | US21, US28–US32 | Pending. |
 
 ## Implementation rulings
+
+Task 14 passed **634 tests in 74.29 seconds**, Ruff formatting/lint and strict mypy clean.
+Settings selects stable IDs from scanned Testhuset branches without name defaults. DSB uses completed
+net seconds for included resolved assignments, including per-session overrides and historical
+default resolution, before aggregation/rounding. Other local and Testhuset totals remain unchanged.
+The review lists included/excluded totals and every date/branch, calls out unresolved assignments,
+and disables Fill for fully excluded weeks. Empty selections block preview before external reads.
+Changing the selection invalidates the prepared review even if proposed rounded totals are equal.
+Previously selected IDs missing from a later scan remain visible but their assignments are excluded
+as unresolved; rescanning never silently substitutes a different branch.
 
 - Validation follows actual instants for overlap and containment. Effective rounded boundaries
   remain paired and positive, while valid outward work/nearest lunch rounding retains established

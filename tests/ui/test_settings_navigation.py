@@ -51,6 +51,12 @@ class Tasks:
 
 
 class DsbTasks(Tasks):
+    def branch_tasks(self):
+        return ()
+
+    def included_branches(self):
+        return frozenset()
+
     def is_enabled(self) -> bool:
         return False
 

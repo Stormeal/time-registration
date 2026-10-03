@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
@@ -30,6 +31,7 @@ from qi_flow.application.dto import (
     WeeklyProgressView,
 )
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
+from qi_flow.application.sync_capture import captured_mutation
 from qi_flow.domain.errors import (
     InvalidIntervalError,
     InvalidStateTransitionError,
@@ -96,6 +98,15 @@ class TimeTrackingApplicationService:
         self._rounding_minutes = rounding_minutes
         self._undo_action: _UndoAction | None = None
 
+    def _mutation(self, *, finish_grace: bool = False) -> AbstractContextManager[UnitOfWork]:
+        now = self._when(None)
+        return captured_mutation(
+            self._uow_factory,
+            self._identifiers,
+            now,
+            not_before=now + timedelta(seconds=30) if finish_grace else None,
+        )
+
     @property
     def rounding_minutes(self) -> int:
         with self._uow_factory() as uow:
@@ -112,7 +123,7 @@ class TimeTrackingApplicationService:
     def add_manual_session(self, command: ManualWorkSessionCommand) -> WorkSession:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             self._ensure_session_has_no_overlap(uow, start, end)
             session = WorkSession(
                 id=self._identifiers.session_id(),
@@ -132,7 +143,7 @@ class TimeTrackingApplicationService:
     def update_work_session(self, command: UpdateWorkSessionCommand) -> WorkSession:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise InvalidStateTransitionError("Choose a completed work session to edit.")
@@ -160,7 +171,7 @@ class TimeTrackingApplicationService:
         now = self._when(None)
         if start >= now:
             raise InvalidIntervalError("The corrected start time must be before now.")
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise InvalidStateTransitionError("Choose the running work session to correct.")
@@ -184,7 +195,7 @@ class TimeTrackingApplicationService:
     def add_manual_deduction(self, command: ManualDeductionCommand) -> Deduction:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None:
                 raise InvalidStateTransitionError(
@@ -212,7 +223,7 @@ class TimeTrackingApplicationService:
     def update_deduction(self, command: UpdateDeductionCommand) -> Deduction:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(command.deduction_id)
             if deduction is None or deduction.deleted_at is not None or deduction.is_active:
                 raise InvalidStateTransitionError("Choose a completed lunch or break to edit.")
@@ -239,7 +250,7 @@ class TimeTrackingApplicationService:
 
     def delete_work_session(self, session_id: SessionId) -> None:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None:
                 raise InvalidStateTransitionError("That work session no longer exists.")
@@ -261,7 +272,7 @@ class TimeTrackingApplicationService:
 
     def delete_deduction(self, deduction_id: DeductionId) -> None:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(deduction_id)
             if deduction is None or deduction.deleted_at is not None:
                 raise InvalidStateTransitionError("That lunch or break no longer exists.")
@@ -275,7 +286,7 @@ class TimeTrackingApplicationService:
 
     def restore_work_session(self, session_id: SessionId) -> WorkSession:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(session_id)
             snapshot = uow.audit.latest("work_session", str(session_id))
             if session is None or snapshot is None:
@@ -292,7 +303,7 @@ class TimeTrackingApplicationService:
 
     def restore_deduction(self, deduction_id: DeductionId) -> Deduction:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(deduction_id)
             snapshot = uow.audit.latest("deduction", str(deduction_id))
             if deduction is None or snapshot is None:
@@ -346,7 +357,7 @@ class TimeTrackingApplicationService:
     def restore_history_entry(self, audit_id: str) -> WorkSession | Deduction:
         """Restore the exact before-image selected from an entry's recoverable history."""
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             row = uow.audit.get_active(audit_id, now)
             if row is None:
                 raise InvalidStateTransitionError(
@@ -389,7 +400,7 @@ class TimeTrackingApplicationService:
             raise InvalidStateTransitionError("This history record cannot be restored here.")
 
     def update_day_details(self, command: UpdateDayDetailsCommand) -> DaySummaryView:
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             existing = uow.days.get(command.work_date)
             details = DayDetails(
                 command.work_date,
@@ -808,7 +819,7 @@ class TimeTrackingApplicationService:
 
     def resolve_sleep_gap(self, resolution: str) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             value = uow.settings.get("pending_sleep_gap")
             if not isinstance(value, dict):
                 raise InvalidStateTransitionError("There is no sleep interval to resolve.")
@@ -876,7 +887,7 @@ class TimeTrackingApplicationService:
         if start > now:
             raise InvalidIntervalError("The start time cannot be in the future.")
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             self._ensure_no_blocking_session(uow.sessions.get_active(), now)
             self._ensure_session_has_no_overlap(uow, start, now)
             session = WorkSession(
@@ -894,7 +905,7 @@ class TimeTrackingApplicationService:
     def start_work(self, command: StartWorkCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         rounding_minutes = self.rounding_minutes
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             active = uow.sessions.get_active()
             self._ensure_no_blocking_session(active, now)
             session = WorkSession(
@@ -912,7 +923,7 @@ class TimeTrackingApplicationService:
     def finish_work(self, command: FinishWorkCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation(finish_grace=True) as uow:
             session = self._require_active(uow)
             if uow.deductions.get_active(session.id) is not None:
                 raise InvalidStateTransitionError("End lunch before finishing work.")
@@ -927,7 +938,7 @@ class TimeTrackingApplicationService:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
         rounding_minutes = self.rounding_minutes
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._ensure_not_blocked(session, now)
             if uow.deductions.get_active(session.id) is not None:
@@ -949,7 +960,7 @@ class TimeTrackingApplicationService:
     def finish_deduction(self, command: FinishDeductionCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._ensure_not_blocked(session, now)
             deduction = uow.deductions.get_active(session.id)
@@ -1015,7 +1026,7 @@ class TimeTrackingApplicationService:
         if action is None or now - action.occurred_at > timedelta(seconds=30):
             self._undo_action = None
             raise InvalidStateTransitionError("The 30-second undo period has expired.")
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             if action.kind in {"start_deduction", "finish_deduction"}:
                 deduction = uow.deductions.get(DeductionId(action.session_id))
                 if deduction is None:
@@ -1072,7 +1083,7 @@ class TimeTrackingApplicationService:
 
     def continue_recovery(self) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             session.recovery_acknowledged_at = now
             session.updated_at = now
@@ -1082,7 +1093,7 @@ class TimeTrackingApplicationService:
 
     def delete_recovery(self) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._record_session_audit(uow, session, "delete", now)
             session.deleted_at = now

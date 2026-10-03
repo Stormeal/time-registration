@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Protocol
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
+from qi_flow.application.sync_capture import captured_mutation
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import IsoWeek, SessionId, WorkSession
 from qi_flow.domain.testhuset import ProjectTask, decimal_hours, parse_hours
@@ -123,7 +124,7 @@ class TesthusetService:
     def assign(self, session_id: SessionId, task_id: str | None) -> None:
         if task_id is not None:
             self._require_task(task_id)
-        with self._uow_factory() as uow:
+        with captured_mutation(self._uow_factory, self._identifiers, self._clock.now()) as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise ValueError("Choose a completed work session before assigning a task.")
@@ -132,7 +133,7 @@ class TesthusetService:
     def assign_active(self, session_id: SessionId, task_id: str) -> None:
         """Save a selected task on the currently running work session."""
         self._require_task(task_id)
-        with self._uow_factory() as uow:
+        with captured_mutation(self._uow_factory, self._identifiers, self._clock.now()) as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise ValueError("Choose the active work session before assigning a task.")

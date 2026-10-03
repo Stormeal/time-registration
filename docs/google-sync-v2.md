@@ -1,8 +1,9 @@
 # Google Sheets sync protocol V2
 
 The audit remediation replaces snapshot replacement with an immutable change log. The current
-foundation stores protocol state locally; ordinary V2 publication remains disabled until mutation
-capture, reconciliation, and reviewed initialization or migration are implemented and verified.
+implementation stores protocol state and captures eligible local commands atomically; ordinary V2
+publication remains disabled until transport, reconciliation, and reviewed initialization or
+migration are implemented and verified.
 The public V1 sync operation refuses before reading the Sheet or importing records and explains
 that a reviewed upgrade is required. Local tracking remains available.
 
@@ -31,21 +32,22 @@ stored review. Neither tombstones nor graph history use the recovery audit's 30-
 
 ## Publication and Undo contract
 
-The remaining implementation captures eligible completed work, its completed deductions, daily
+The local capture implementation records eligible completed work, its completed deductions, daily
 office status and notes, assignments, deletion, and restoration with their changes in the same
 transaction. Active work and its deductions stay local. A command's group carries the reviewed
 parent/deduction heads so concurrent edits cannot silently combine incompatible aggregates.
 
-Finish completion uses a durable 30-second publication grace deadline. Publication-attempt state
+Finish completion and its pending descendants use a durable 30-second publication grace deadline. Publication-attempt state
 is persisted before network work and survives timeouts and restart. Undo remains a local command;
-an uncertain or published completion requires a durable withdrawal. A subsequent completion
+every captured completion gets a durable withdrawal, including one not yet attempted. A subsequent completion
 descends from that withdrawal. Retries retain original IDs and destinations.
 
 Publication will append complete groups as canonical JSON `stringValue` cells to dedicated
 `QI_FLOW_SYNC_V2`; it will never clear a shared tab, reserve rows from a client-side read, or
 interpret payloads as formulas. Exact readback verifies content before acknowledging the specific
-pending IDs. Network work runs outside SQLite transactions. Configuration generations prevent an
-obsolete job from publishing or applying results to a new target.
+pending IDs. Network work runs outside SQLite transactions. Configuration changes and explicit disable advance a local generation and stop capture. Jobs
+will bind this generation to prevent obsolete publication or application to a new target. Reviewed
+migration must establish baseline heads before setting `migration_complete` and enabling capture.
 
 ## Migration and release prerequisites
 

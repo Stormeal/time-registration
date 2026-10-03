@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
-from qi_flow.application.dto import StartDeductionCommand, StartWorkCommand
+from qi_flow.application.dto import (
+    FinishDeductionCommand,
+    StartDeductionCommand,
+    StartWorkCommand,
+)
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import DeductionId, DeductionKind, SessionId
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
@@ -112,6 +117,37 @@ def test_menu_reflects_lunch_state_and_blocks_finish(tmp_path: object, qtbot: Qt
     assert "end lunch" in tray._finish_action.toolTip().lower()
 
 
+def test_tray_shows_second_lunch_after_snoozing_first(tmp_path: object, qtbot: QtBot) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")  # type: ignore[operator]
+    database.initialize()
+    clock = FixedClock(start)
+    service = TimeTrackingApplicationService(lambda: SQLiteUnitOfWork(database), clock, FixedIds())
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    tray = TrayController(QIcon(), service, FakeStartupManager())
+    qtbot.addWidget(tray._panel)
+    clock.value += timedelta(minutes=45)
+    tray._check_reminders()
+    assert len(tray._reminder_dialogs) == 1
+
+    first = tray._reminder_dialogs[0]
+    snooze = next(
+        button for button in first.findChildren(QPushButton) if button.text() == "Snooze 60 min"
+    )
+    snooze.click()
+    assert tray._reminder_dialogs == []
+    clock.value += timedelta(minutes=1)
+    service.finish_deduction(FinishDeductionCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    tray._check_reminders()
+
+    assert len(tray._reminder_dialogs) == 1
+    assert tray._reminder_dialogs[0] is not first
+    tray._reminder_dialogs[0].accept()
+
+
 def test_start_with_windows_toggle_writes_through_to_the_startup_manager(
     tmp_path: object, qtbot: QtBot
 ) -> None:
@@ -124,6 +160,32 @@ def test_start_with_windows_toggle_writes_through_to_the_startup_manager(
     tray._startup_action.trigger()
 
     assert startup_manager.set_calls == [True]
+
+
+def test_stale_lunch_dialog_cannot_snooze_a_new_lunch(tmp_path: object, qtbot: QtBot) -> None:
+    clock = FixedClock(datetime(2026, 9, 15, 7, tzinfo=UTC))
+    database = SQLiteDatabase(tmp_path / "qi-flow.sqlite3")  # type: ignore[operator]
+    database.initialize()
+    service = TimeTrackingApplicationService(lambda: SQLiteUnitOfWork(database), clock, FixedIds())
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    tray = TrayController(QIcon(), service, FakeStartupManager())
+    qtbot.addWidget(tray._panel)
+    clock.value += timedelta(minutes=45)
+    tray._check_reminders()
+    stale_dialog = tray._reminder_dialogs[0]
+    service.finish_deduction(FinishDeductionCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    next(
+        button
+        for button in stale_dialog.findChildren(QPushButton)
+        if button.text() == "Snooze 60 min"
+    ).click()
+    clock.value += timedelta(minutes=45)
+    tray._check_reminders()
+    assert len(tray._reminder_dialogs) == 1
+    assert tray._reminder_dialogs[0] is not stale_dialog
+    tray._reminder_dialogs[0].accept()
 
 
 def test_menu_action_starts_work_through_the_service(tmp_path: object, qtbot: QtBot) -> None:

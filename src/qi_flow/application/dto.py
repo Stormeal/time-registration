@@ -150,6 +150,7 @@ class ReminderView:
     kind: str
     elapsed_seconds: int
     net_seconds: int
+    subject_id: str
 
 
 @dataclass(frozen=True, slots=True)

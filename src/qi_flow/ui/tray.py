@@ -195,8 +195,10 @@ class TrayController(QObject):
                 QSystemTrayIcon.MessageIcon.Information,
             )
 
-            def snooze(minutes: int, kind: str = reminder.kind) -> None:
-                self._service.snooze_reminder(kind, minutes)
+            def snooze(
+                minutes: int, kind: str = reminder.kind, subject_id: str = reminder.subject_id
+            ) -> None:
+                self._service.snooze_reminder(kind, minutes, subject_id=subject_id)
 
             dialog = ReminderDialog(
                 reminder,

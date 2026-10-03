@@ -248,6 +248,7 @@ class TimeTrackingApplicationService:
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             for deduction in uow.deductions.list_for_session(session.id):
                 if deduction.deleted_at is None:
                     self._record_deduction_audit(uow, deduction, "delete", now)
@@ -255,6 +256,8 @@ class TimeTrackingApplicationService:
                     deduction.updated_at = now
                     deduction.revision += 1
                     uow.deductions.save(deduction)
+                    if deduction.kind is DeductionKind.LUNCH:
+                        self._retire_reminder(uow, "lunch", str(deduction.id), now)
 
     def delete_deduction(self, deduction_id: DeductionId) -> None:
         now = self._when(None)
@@ -267,6 +270,8 @@ class TimeTrackingApplicationService:
             deduction.updated_at = now
             deduction.revision += 1
             uow.deductions.save(deduction)
+            if deduction.kind is DeductionKind.LUNCH:
+                self._retire_reminder(uow, "lunch", str(deduction.id), now)
 
     def restore_work_session(self, session_id: SessionId) -> WorkSession:
         now = self._when(None)
@@ -572,7 +577,7 @@ class TimeTrackingApplicationService:
             uow.settings.save("lunch_reminder_minutes", settings.lunch_minutes, now)
 
     def due_reminders(self) -> list[ReminderView]:
-        """Return each unsnoozed threshold crossing once for the active session."""
+        """Return each unsnoozed threshold crossing once for its active timer."""
         now = self._when(None)
         settings = self.reminder_settings()
         due: list[ReminderView] = []
@@ -590,6 +595,11 @@ class TimeTrackingApplicationService:
             if active_deduction is not None and active_deduction.kind is DeductionKind.LUNCH:
                 candidates.append(("lunch", settings.lunch_minutes * 60, settings.lunch_enabled))
             for kind, threshold, enabled in candidates:
+                subject_id = (
+                    str(active_deduction.id)
+                    if kind == "lunch" and active_deduction is not None
+                    else str(session.id)
+                )
                 duration = (
                     int((now - active_deduction.actual_started_at).total_seconds())
                     if kind == "lunch" and active_deduction is not None
@@ -598,14 +608,15 @@ class TimeTrackingApplicationService:
                 if (
                     not enabled
                     or duration < threshold
-                    or self._reminder_is_suppressed(uow, kind, session.id, now)
+                    or self._reminder_is_suppressed(uow, kind, subject_id, now)
                 ):
                     continue
-                uow.settings.save(f"reminder_notified_{kind}", {"session_id": str(session.id)}, now)
-                due.append(ReminderView(kind, duration, state_net_seconds))
+                subject_key = "deduction_id" if kind == "lunch" else "session_id"
+                uow.settings.save(f"reminder_notified_{kind}", {subject_key: subject_id}, now)
+                due.append(ReminderView(kind, duration, state_net_seconds, subject_id))
         return due
 
-    def snooze_reminder(self, kind: str, minutes: int) -> None:
+    def snooze_reminder(self, kind: str, minutes: int, *, subject_id: str | None = None) -> None:
         if kind not in {"work", "lunch"} or minutes not in {15, 30, 60}:
             raise ValueError("Reminder snooze must be 15, 30, or 60 minutes.")
         now = self._when(None)
@@ -613,10 +624,17 @@ class TimeTrackingApplicationService:
             session = uow.sessions.get_active()
             if session is None:
                 return
+            deduction = uow.deductions.get_active(session.id) if kind == "lunch" else None
+            if kind == "lunch" and (deduction is None or deduction.kind is not DeductionKind.LUNCH):
+                return
+            subject_key = "deduction_id" if kind == "lunch" else "session_id"
+            current_id = str(deduction.id) if deduction is not None else str(session.id)
+            if subject_id is not None and subject_id != current_id:
+                return
             uow.settings.save(
                 f"reminder_snooze_{kind}",
                 {
-                    "session_id": str(session.id),
+                    subject_key: current_id,
                     "until": (now + timedelta(minutes=minutes)).isoformat(),
                 },
                 now,
@@ -624,18 +642,26 @@ class TimeTrackingApplicationService:
             uow.settings.save(f"reminder_notified_{kind}", None, now)
 
     @staticmethod
-    def _reminder_is_suppressed(
-        uow: UnitOfWork, kind: str, session_id: SessionId, now: datetime
-    ) -> bool:
+    def _reminder_is_suppressed(uow: UnitOfWork, kind: str, subject_id: str, now: datetime) -> bool:
+        subject_key = "deduction_id" if kind == "lunch" else "session_id"
         snooze = uow.settings.get(f"reminder_snooze_{kind}")
-        if isinstance(snooze, dict) and snooze.get("session_id") == str(session_id):
+        if isinstance(snooze, dict) and snooze.get(subject_key) == subject_id:
             try:
                 if datetime.fromisoformat(str(snooze["until"])) > now:
                     return True
             except (KeyError, ValueError):
                 pass
         notified = uow.settings.get(f"reminder_notified_{kind}")
-        return isinstance(notified, dict) and notified.get("session_id") == str(session_id)
+        return isinstance(notified, dict) and notified.get(subject_key) == subject_id
+
+    @staticmethod
+    def _retire_reminder(uow: UnitOfWork, kind: str, subject_id: str, now: datetime) -> None:
+        subject_key = "deduction_id" if kind == "lunch" else "session_id"
+        for state in ("snooze", "notified"):
+            key = f"reminder_{state}_{kind}"
+            value = uow.settings.get(key)
+            if isinstance(value, dict) and value.get(subject_key) == subject_id:
+                uow.settings.save(key, None, now)
 
     def _summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
         start, _ = local_day_bounds(start_date)
@@ -892,6 +918,7 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError("End lunch before finishing work.")
             self._complete_session(session, now)
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             self._copy_office_context(uow, session.actual_started_at, now)
         self._undo_action = _UndoAction("finish", str(session.id), now)
         return ActiveStateView(None, None, None, None, 0)
@@ -944,6 +971,8 @@ class TimeTrackingApplicationService:
             deduction.updated_at = now
             deduction.revision += 1
             uow.deductions.save(deduction)
+            if deduction.kind is DeductionKind.LUNCH:
+                self._retire_reminder(uow, "lunch", str(deduction.id), now)
         self._undo_action = _UndoAction("finish_deduction", str(deduction.id), now)
         return self.active_state(now)
 
@@ -1013,6 +1042,8 @@ class TimeTrackingApplicationService:
                 deduction.updated_at = now
                 deduction.revision += 1
                 uow.deductions.save(deduction)
+                if action.kind == "start_deduction" and deduction.kind is DeductionKind.LUNCH:
+                    self._retire_reminder(uow, "lunch", str(deduction.id), now)
             else:
                 session = uow.sessions.get(SessionId(action.session_id))
                 if session is None:
@@ -1034,6 +1065,8 @@ class TimeTrackingApplicationService:
                 session.updated_at = now
                 session.revision += 1
                 uow.sessions.save(session)
+                if action.kind == "start":
+                    self._retire_reminder(uow, "work", str(session.id), now)
         self._undo_action = None
         return self.active_state(now)
 
@@ -1056,6 +1089,7 @@ class TimeTrackingApplicationService:
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             for deduction in uow.deductions.list_for_session(session.id):
                 if deduction.deleted_at is None:
                     self._record_deduction_audit(uow, deduction, "delete", now)
@@ -1063,6 +1097,8 @@ class TimeTrackingApplicationService:
                     deduction.updated_at = now
                     deduction.revision += 1
                     uow.deductions.save(deduction)
+                    if deduction.kind is DeductionKind.LUNCH:
+                        self._retire_reminder(uow, "lunch", str(deduction.id), now)
         return ActiveStateView(None, None, None, None, 0)
 
     def _complete_session(self, session: WorkSession, now: datetime) -> None:

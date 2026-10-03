@@ -819,3 +819,91 @@ def test_work_and_lunch_reminders_are_configurable_and_snoozable(tmp_path: Path)
     service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
     clock.value += timedelta(minutes=15)
     assert [reminder.kind for reminder in service.due_reminders()] == ["lunch"]
+
+
+def test_second_lunch_in_same_work_gets_own_reminder(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.snooze_reminder("lunch", 60)
+    clock.value += timedelta(minutes=1)
+    service.finish_deduction(FinishDeductionCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    assert service.due_reminders() == []
+
+
+@pytest.mark.parametrize("snooze_minutes", [15, 30, 60])
+def test_current_lunch_snooze_uses_selected_duration(tmp_path: Path, snooze_minutes: int) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.snooze_reminder("lunch", snooze_minutes)
+    clock.value += timedelta(minutes=snooze_minutes, seconds=-1)
+    assert service.due_reminders() == []
+    clock.value += timedelta(seconds=1)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+
+def test_ended_lunch_reminder_is_retired_and_undo_can_remind_again(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(hours=9)
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    assert [item.kind for item in service.due_reminders()] == ["work"]
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.finish_deduction(FinishDeductionCommand())
+    assert service.due_reminders() == []
+    assert service.undo_last_timer_action().active_deduction_kind is DeductionKind.LUNCH
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+    restarted_ids = FixedIds()
+    restarted_ids.deduction_count = 1
+    restarted = TimeTrackingApplicationService(
+        lambda: SQLiteUnitOfWork(database), clock, restarted_ids
+    )
+    assert restarted.due_reminders() == []
+    clock.value += timedelta(minutes=1)
+    restarted.finish_deduction(FinishDeductionCommand())
+    restarted.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in restarted.due_reminders()] == ["lunch"]
+
+
+def test_deleting_active_lunch_does_not_suppress_next_lunch(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.delete_deduction(DeductionId("deduction-1"))
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+
+def test_legacy_parent_keyed_lunch_state_is_ignored(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    with SQLiteUnitOfWork(database) as uow:
+        uow.settings.save("reminder_notified_lunch", {"session_id": "session-1"}, start)
+        uow.settings.save(
+            "reminder_snooze_lunch",
+            {"session_id": "session-1", "until": (start + timedelta(hours=2)).isoformat()},
+            start,
+        )
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]

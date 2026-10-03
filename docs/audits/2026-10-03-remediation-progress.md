@@ -76,6 +76,18 @@ The composed V2 service is still not connected to the production UI. Guided migr
 review, authorization/scheduling and runtime ownership gates remain. The legacy public sync method
 and snapshot adapter refuse; the actionable upgrade message in Settings is carried into Task 11.
 
+## Guided migration verified
+
+The migration application, separate Sheets safety ledger, verified SQLite safety-copy adapter and
+review dialog passed `scripts/check.ps1`: **572 tests in 71.68 seconds**, 118 formatted Python
+files, Ruff clean, strict mypy clean for 65 source modules. The 25 added checks cover divergent and
+identical participant histories, deletions, empty machines, unsupported formats, missing
+acknowledgements, backup failure, active aggregates, stable retry after lost seed/completion
+responses, competing initializers and renewed V1 writes. No real workbook was modified.
+
+This completes the migration components; production Settings and owned-worker wiring remain in
+Tasks 11–12. The existing production UI still refuses legacy snapshot synchronization.
+
 ## Task status
 
 | Plan task | Audit / stories | Status |
@@ -86,7 +98,7 @@ and snapshot adapter refuse; the actionable upgrade message in Settings is carri
 | 4 — Updater ownership | A07; US32 | Complete; 23 focused tests, review and integrated gate pass; packaged release check remains open. |
 | 5 — Exact DSB row | A09; US30 | Complete; 29 focused tests, review and integrated gate pass; live DSB check remains open. |
 | 6 — Explicit row choices | A18; US45 | Complete code; 93 focused tests, review and integrated gate pass; destination release checks remain open. |
-| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Tasks 7a/7b local persistence/capture and Task 8 transport are verified. Task 9 causal reconciliation passes automated acceptance and the integrated gate. Guided migration/conflict review/runtime wiring remain. Ordinary V2 publication remains disabled until reconciliation and reviewed migration pass; V1 sync visibly refuses snapshot writes. |
+| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Tasks 7–10 storage, capture, transport, causal reconciliation and guided migration components pass automated acceptance and integrated gates. Conflict review/runtime wiring, responsive authorization and scheduling remain. Ordinary V2 publication remains disabled in the production UI; V1 sync refuses snapshot writes. |
 | 14 — DSB allowlist | US31 | Pending. |
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |

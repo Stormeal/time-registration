@@ -91,6 +91,35 @@ remote snapshot, the original sync tab, unrelated workbook content, and a local 
 Every declared participant contributes and acknowledges its snapshot. Unproven differing values
 remain conflicts. Stable initialization and migration IDs make interruption resumable.
 
+The implemented migration creates `QI_FLOW_SYNC_V2` and `QI_FLOW_MIGRATION_V2` together in one
+atomic Sheets batch. Existing tabs are never cleared or replaced. A competing initializer's
+existing title rejects the batch; the losing client must read and join the winning manifest.
+The V2 change manifest retains its three-field schema. The separate migration ledger stores a
+declared participant roster, one raw frozen V1 row per snapshot event, and verified per-machine
+snapshot acknowledgements. The frozen copy is append-only through QI Flow and its fingerprint
+is rechecked; a collaborator's manual mutation fails verification.
+
+Local safety databases are verified before contribution and kept outside daily backup retention.
+They preserve active timers too; only completed aggregates and day metadata become seeds.
+Seed IDs derive from the log identity and canonical aggregate business values. Legacy revision
+and created/updated bookkeeping are normalized for deduplication, while full source snapshots
+and safety databases retain the originals. Rounding, sources, effective bounds and assignments
+remain meaningful differences. Deletion/live variants remain separate heads. Numeric revision
+never chooses a winner.
+
+Only seed appends are allowed before cutover. Every declared participant acknowledgement and
+every complete seed must be read back before a durable completion manifest and local activation.
+Unchanged retries reuse seeds and completion content, including accepted writes with lost
+responses. Completed history must remain unchanged during this review; changed acknowledged
+local snapshots pause activation and require a fresh reviewed migration into a new private Sheet,
+preserving the old Sheet and safety copies. Unsupported payloads are retained for review.
+Each subsequent pull and append checks the frozen V1 fingerprint when a migration ledger exists;
+renewed old-client writes produce a durable problem and pause publication. This detection cannot
+atomically fence an old writer.
+
+These components pass synthetic adapter, temporary SQLite and Qt interaction checks. Production
+Settings/worker wiring is the next task, so the released UI still does not enable ordinary V2 sync.
+
 Unknown schemas, malformed rows, incomplete groups, missing ancestry, conflicting IDs, and invalid
 timesheet aggregates require durable, visible reconciliation. Quota failures leave pending changes
 intact. Automatic scheduling remains gated on verified protocol and migration. Two-client scratch

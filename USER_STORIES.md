@@ -18,7 +18,7 @@ after its acceptance criteria pass and any required release smoke check is recor
 | Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
 | In progress | US44 | Endpoint-date/DST editing and protected unsaved changes pass the 494-test gate; final branch review remains. |
 | In progress | US45 | Explicit choices pass automated acceptance and review; destination release verification remains open. |
-| Not started | US46 | Upgrade existing shared Sheets data while preserving the sheet and every participating machine's history. |
+| In progress | US46 | Upgrade existing shared Sheets data while preserving the sheet and every participating machine's history. |
 
 ## Epic G — Setup, settings, and distribution
 
@@ -218,7 +218,9 @@ Acceptance criteria:
 
 ### US46 — Upgrade a shared timesheet without losing history · P1
 
-Implementation status: **Not started** · authorized with the remediation plan on 2026-10-03;
+Implementation status: **In progress** · guided migration application, safety-copy adapter and
+review dialog pass automated acceptance in the 572-test gate. Production Settings/worker wiring
+and the two-client live workbook release check remain. Authorized with the remediation plan on 2026-10-03;
 required before enabling the replacement sync protocol for
 an existing V1 workbook. US29 remains the owner of ordinary synchronization and backup reconciliation.
 
@@ -262,7 +264,8 @@ Acceptance criteria:
   `USER_STORIES_ARCHIVE.md`.
 - US43 (Epic Q, daily action layout and fair start rounding) is complete and archived in
   `USER_STORIES_ARCHIVE.md`.
-- US44 passes automated implementation acceptance; US46 remains a planned audit follow-up.
+- US44 passes automated implementation acceptance; US46 migration code passes automated
+  acceptance, with production worker wiring and live release acceptance remaining.
   US45 records the explicit row-choice requirement
   confirmed on 2026-10-03. The user authorized implementation of the remediation plan on
   2026-10-03; task and verification progress is recorded alongside the plan.

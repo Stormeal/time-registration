@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
 from qi_flow.application.google_sync import GoogleSyncConfiguration
 from qi_flow.application.google_sync_service import GoogleSyncUpgradeRequiredError
+from qi_flow.application.sync_migration import fingerprint
 from qi_flow.application.sync_models import (
     SyncChange,
     SyncProblem,
@@ -23,6 +24,7 @@ from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 
 _TAB = "QI_FLOW_SYNC_V1"
 _V2_TAB = "QI_FLOW_SYNC_V2"
+_MIGRATION_TAB = "QI_FLOW_MIGRATION_V2"
 
 
 class GoogleSheetsSync:
@@ -96,6 +98,7 @@ class GoogleSheetsSync:
 
     def read_changes(self) -> tuple[SyncChange, ...]:
         self._problems = ()
+        self._guard_migration(())
         _, rows = self._v2_rows(self._service())
         changes: list[SyncChange] = []
         problems: list[SyncProblem] = []
@@ -118,6 +121,160 @@ class GoogleSheetsSync:
     def read_problems(self) -> tuple[SyncProblem, ...]:
         return self._problems
 
+    def read_legacy_rows(self) -> Sequence[Sequence[object]]:
+        service = self._service()
+        metadata = (
+            service.spreadsheets().get(spreadsheetId=self._configuration.spreadsheet_id).execute()
+        )
+        matches = [
+            s for s in metadata.get("sheets", []) if s.get("properties", {}).get("title") == _TAB
+        ]
+        if not matches:
+            return ()
+        if len(matches) != 1:
+            raise ValueError("The original V1 tab is ambiguous; review it before migration.")
+        rows: list[list[object]] = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=self._configuration.spreadsheet_id,
+                range=f"{_TAB}!A:E",
+                valueRenderOption="FORMULA",
+            )
+            .execute()
+            .get("values", [])
+        )
+        return rows
+
+    def read_migration_events(self) -> tuple[Mapping[str, object], ...]:
+        service = self._service()
+        metadata = (
+            service.spreadsheets().get(spreadsheetId=self._configuration.spreadsheet_id).execute()
+        )
+        matches = [
+            s
+            for s in metadata.get("sheets", [])
+            if s.get("properties", {}).get("title") == _MIGRATION_TAB
+        ]
+        if not matches:
+            return ()
+        if len(matches) != 1:
+            raise ValueError("The migration ledger is ambiguous.")
+        rows = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=self._configuration.spreadsheet_id,
+                range=f"{_MIGRATION_TAB}!A:A",
+                valueRenderOption="FORMULA",
+            )
+            .execute()
+            .get("values", [])
+        )
+        events: list[Mapping[str, object]] = []
+        for row in rows:
+            if len(row) != 1 or not isinstance(row[0], str):
+                raise ValueError("The migration safety ledger has an invalid row.")
+            value = parse_json(row[0])
+            if not isinstance(value, Mapping):
+                raise ValueError("The migration safety ledger has an invalid record.")
+            events.append(value)
+        if not events or events[0].get("kind") != "migration_manifest":
+            raise ValueError("The migration ledger has no reviewed manifest.")
+        target = SyncTarget(
+            str(events[0].get("spreadsheet_id", "")), str(events[0].get("log_id", ""))
+        )
+        if target.spreadsheet_id != self._configuration.spreadsheet_id or (
+            self._target is not None and self._target != target
+        ):
+            raise ValueError("The migration log identity differs from this reviewed destination.")
+        self._target = target
+        self._v2_rows(service)
+        return tuple(events)
+
+    @staticmethod
+    def _append_request(
+        sheet_id: int, records: Sequence[Mapping[str, object]]
+    ) -> dict[str, object]:
+        return {
+            "appendCells": {
+                "sheetId": sheet_id,
+                "fields": "userEnteredValue",
+                "rows": [
+                    {"values": [{"userEnteredValue": {"stringValue": canonical_json(record)}}]}
+                    for record in records
+                ],
+            }
+        }
+
+    def initialize_migration(
+        self, target: SyncTarget, events: Sequence[Mapping[str, object]]
+    ) -> None:
+        if (
+            target.spreadsheet_id != self._configuration.spreadsheet_id
+            or not events
+            or events[0].get("log_id") != target.log_id
+        ):
+            raise ValueError("The migration manifest does not match the requested destination.")
+        service = self._service()
+        metadata = service.spreadsheets().get(spreadsheetId=target.spreadsheet_id).execute()
+        titles = {s.get("properties", {}).get("title") for s in metadata.get("sheets", [])}
+        if {_V2_TAB, _MIGRATION_TAB} & titles:
+            raise ValueError("A V2 tab already exists; review and join its migration.")
+        # Fixed IDs make this batch self-contained. A concurrent add/title collision
+        # rejects the entire batch rather than overwriting a winning initializer.
+        v2_id = int(fingerprint(target.log_id + ":changes")[:7], 16)
+        ledger_id = int(fingerprint(target.log_id + ":migration")[:7], 16)
+        if v2_id == ledger_id:
+            raise ValueError("Migration tab identifiers collide; review initialization again.")
+        requests = [
+            {"addSheet": {"properties": {"sheetId": v2_id, "title": _V2_TAB}}},
+            {"addSheet": {"properties": {"sheetId": ledger_id, "title": _MIGRATION_TAB}}},
+            self._append_request(
+                v2_id, ({"kind": "manifest", "schema_version": 2, "log_id": target.log_id},)
+            ),
+            self._append_request(ledger_id, events),
+        ]
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=target.spreadsheet_id, body={"requests": requests}
+        ).execute()
+        self._target = target
+        self.read_migration_events()
+
+    def append_migration_events(self, events: Sequence[Mapping[str, object]]) -> None:
+        self.read_migration_events()
+        if not events:
+            return
+        service = self._service()
+        metadata = (
+            service.spreadsheets().get(spreadsheetId=self._configuration.spreadsheet_id).execute()
+        )
+        matches = [
+            s["properties"]
+            for s in metadata.get("sheets", [])
+            if s.get("properties", {}).get("title") == _MIGRATION_TAB
+        ]
+        if len(matches) != 1 or type(matches[0].get("sheetId")) is not int:
+            raise ValueError("The migration ledger identity changed.")
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self._configuration.spreadsheet_id,
+            body={"requests": [self._append_request(matches[0]["sheetId"], events)]},
+        ).execute()
+
+    def _guard_migration(self, changes: Sequence[SyncChange]) -> None:
+        events = self.read_migration_events()
+        if not events:
+            return  # Pure transport fixtures; production activation requires migration.
+        expected = events[0].get("legacy_fingerprint")
+        raw = self.read_legacy_rows()
+        if fingerprint(raw) != expected:
+            self._problems = (SyncProblem(fingerprint(raw), "legacy_writes_resumed", raw, _TAB),)
+            raise ValueError("V1 writes resumed; pause and upgrade old writers before review.")
+        if not any(e.get("kind") == "cutover" for e in events) and any(
+            not c.change_id.startswith("seed-") for c in changes
+        ):
+            raise ValueError("Only migration seeds may be appended before reviewed cutover.")
+
     def append_changes(self, changes: Sequence[SyncChange]) -> None:
         groups: dict[str, list[SyncChange]] = {}
         for change in changes:
@@ -126,6 +283,7 @@ class GoogleSheetsSync:
             validate_group(group)
         if not changes:
             return
+        self._guard_migration(changes)
         service = self._service()
         sheet_id, _ = self._v2_rows(service)
         assert self._target is not None

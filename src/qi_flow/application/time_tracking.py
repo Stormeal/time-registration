@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
@@ -36,6 +36,7 @@ from qi_flow.domain.errors import (
     OverlappingIntervalError,
     RecoveryRequiredError,
 )
+from qi_flow.domain.interval_validation import validate_intervals
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -134,28 +135,19 @@ class TimeTrackingApplicationService:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise InvalidStateTransitionError("Choose a completed work session to edit.")
-            self._ensure_session_has_no_overlap(uow, start, end, session.id)
-            deductions = uow.deductions.list_for_session(session.id)
-            if any(
-                deduction.deleted_at is None
-                and (
-                    deduction.actual_started_at < start
-                    or deduction.actual_ended_at is None
-                    or deduction.actual_ended_at > end
-                )
-                for deduction in deductions
-            ):
-                raise InvalidIntervalError(
-                    "The work session must still contain all of its lunches and breaks."
-                )
+            candidate = replace(
+                session,
+                actual_started_at=start,
+                actual_ended_at=end,
+                effective_started_at=start,
+                effective_ended_at=end,
+                source=EntrySource.MANUAL,
+                updated_at=now,
+                revision=session.revision + 1,
+            )
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            session.actual_started_at = start
-            session.actual_ended_at = end
-            session.effective_started_at = start
-            session.effective_ended_at = end
-            session.source = EntrySource.MANUAL
-            session.updated_at = now
-            session.revision += 1
+            session = candidate
             uow.sessions.save(session)
             self._copy_office_context(uow, start, end)
         return session
@@ -172,23 +164,19 @@ class TimeTrackingApplicationService:
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise InvalidStateTransitionError("Choose the running work session to correct.")
             self._ensure_not_blocked(session, now)
-            self._ensure_session_has_no_overlap(uow, start, now, session.id)
-            deductions = uow.deductions.list_for_session(session.id)
-            if any(
-                deduction.deleted_at is None and deduction.actual_started_at < start
-                for deduction in deductions
-            ):
-                raise InvalidIntervalError(
-                    "The work session must still contain all of its lunches and breaks."
-                )
+            candidate = replace(
+                session,
+                actual_started_at=start,
+                effective_started_at=None,
+                effective_ended_at=None,
+                source=EntrySource.MANUAL,
+                rounding_minutes=1,
+                updated_at=now,
+                revision=session.revision + 1,
+            )
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            session.actual_started_at = start
-            session.effective_started_at = None
-            session.effective_ended_at = None
-            session.source = EntrySource.MANUAL
-            session.rounding_minutes = 1
-            session.updated_at = now
-            session.revision += 1
+            session = candidate
             uow.sessions.save(session)
         return session
 
@@ -232,15 +220,19 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError("The parent work session is unavailable.")
             if session.actual_ended_at is None and not session.is_active:
                 raise InvalidStateTransitionError("The parent work session is unavailable.")
-            self._ensure_deduction_fits(uow, session, start, end, deduction.id)
+            candidate = replace(
+                deduction,
+                actual_started_at=start,
+                actual_ended_at=end,
+                effective_started_at=start,
+                effective_ended_at=end,
+                source=EntrySource.MANUAL,
+                updated_at=now,
+                revision=deduction.revision + 1,
+            )
+            self._validate_candidate(uow, now, deduction=candidate)
             self._record_deduction_audit(uow, deduction, "update", now)
-            deduction.actual_started_at = start
-            deduction.actual_ended_at = end
-            deduction.effective_started_at = start
-            deduction.effective_ended_at = end
-            deduction.source = EntrySource.MANUAL
-            deduction.updated_at = now
-            deduction.revision += 1
+            deduction = candidate
             uow.deductions.save(deduction)
         return deduction
 
@@ -284,14 +276,11 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError(
                     "No recoverable work-session version is available."
                 )
+            candidate = replace(session)
+            self._restore_session_snapshot(candidate, snapshot, now)
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            self._restore_session_snapshot(session, snapshot, now)
-            if session.is_active and uow.sessions.get_active() not in (None, session):
-                raise InvalidStateTransitionError("Cannot restore a second active work session.")
-            if session.actual_ended_at is not None:
-                self._ensure_session_has_no_overlap(
-                    uow, session.actual_started_at, session.actual_ended_at, session.id
-                )
+            session = candidate
             uow.sessions.save(session)
         return session
 
@@ -304,19 +293,11 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError(
                     "No recoverable lunch or break version is available."
                 )
+            candidate = replace(deduction)
+            self._restore_deduction_snapshot(candidate, snapshot, now)
+            self._validate_candidate(uow, now, deduction=candidate)
             self._record_deduction_audit(uow, deduction, "update", now)
-            self._restore_deduction_snapshot(deduction, snapshot, now)
-            session = uow.sessions.get(deduction.session_id)
-            if session is None or session.deleted_at is not None:
-                raise InvalidStateTransitionError("Restore the parent work session first.")
-            if deduction.actual_ended_at is not None:
-                self._ensure_deduction_fits(
-                    uow,
-                    session,
-                    deduction.actual_started_at,
-                    deduction.actual_ended_at,
-                    deduction.id,
-                )
+            deduction = candidate
             uow.deductions.save(deduction)
         return deduction
 
@@ -373,31 +354,11 @@ class TimeTrackingApplicationService:
                 session = uow.sessions.get(session_id)
                 if session is None:
                     raise InvalidStateTransitionError("The work session is unavailable.")
+                session_candidate = replace(session)
+                self._restore_session_snapshot(session_candidate, snapshot, now)
+                self._validate_candidate(uow, now, session=session_candidate)
                 self._record_session_audit(uow, session, "update", now)
-                self._restore_session_snapshot(session, snapshot, now)
-                if session.is_active:
-                    active = uow.sessions.get_active()
-                    if active is not None and active.id != session.id:
-                        raise InvalidStateTransitionError("Cannot restore a second active session.")
-                else:
-                    assert session.actual_ended_at is not None
-                    self._ensure_session_has_no_overlap(
-                        uow, session.actual_started_at, session.actual_ended_at, session.id
-                    )
-                for child_deduction in uow.deductions.list_for_session(session.id):
-                    if child_deduction.deleted_at is None and (
-                        child_deduction.actual_started_at < session.actual_started_at
-                        or (
-                            session.actual_ended_at is not None
-                            and (
-                                child_deduction.actual_ended_at is None
-                                or child_deduction.actual_ended_at > session.actual_ended_at
-                            )
-                        )
-                    ):
-                        raise InvalidIntervalError(
-                            "The restored session would not contain its saved breaks."
-                        )
+                session = session_candidate
                 uow.sessions.save(session)
                 return session
             if entity_type == "deduction":
@@ -412,20 +373,11 @@ class TimeTrackingApplicationService:
                     raise InvalidStateTransitionError(
                         "The parent work session is unavailable. Restore it first."
                     )
+                deduction_candidate = replace(deduction)
+                self._restore_deduction_snapshot(deduction_candidate, snapshot, now)
+                self._validate_candidate(uow, now, deduction=deduction_candidate)
                 self._record_deduction_audit(uow, deduction, "update", now)
-                self._restore_deduction_snapshot(deduction, snapshot, now)
-                if deduction.actual_ended_at is not None:
-                    self._ensure_deduction_fits(
-                        uow,
-                        parent_session,
-                        deduction.actual_started_at,
-                        deduction.actual_ended_at,
-                        deduction.id,
-                    )
-                elif uow.deductions.get_active(parent_session.id) not in (None, deduction):
-                    raise InvalidStateTransitionError(
-                        "Another lunch or break is already running in this session."
-                    )
+                deduction = deduction_candidate
                 uow.deductions.save(deduction)
                 return deduction
             raise InvalidStateTransitionError("This history record cannot be restored here.")
@@ -1150,6 +1102,45 @@ class TimeTrackingApplicationService:
         return start, end
 
     @staticmethod
+    def _validate_candidate(
+        uow: UnitOfWork,
+        now: datetime,
+        *,
+        session: WorkSession | None = None,
+        deduction: Deduction | None = None,
+    ) -> None:
+        # Legacy sync may have left independent invalid aggregates. Local correction
+        # must repair one parent at a time while still refusing candidate conflicts.
+        if session is not None:
+            conflicts = {
+                item.id: item
+                for item in uow.sessions.list_intersecting(
+                    session.actual_started_at, session.actual_ended_at or now
+                )
+                if item.id != session.id
+            }
+            if session.is_active:
+                conflicts.update(
+                    (item.id, item)
+                    for item in uow.sessions.list_all()
+                    if item.id != session.id and item.is_active
+                )
+            validate_intervals(
+                [session, *conflicts.values()],
+                uow.deductions.list_for_session(session.id),
+                as_of=now,
+            )
+        elif deduction is not None:
+            parent = uow.sessions.get(deduction.session_id)
+            if parent is None:
+                raise InvalidStateTransitionError("Restore the parent work session first.")
+            siblings = [
+                deduction if item.id == deduction.id else item
+                for item in uow.deductions.list_for_session(parent.id)
+            ]
+            validate_intervals([parent], siblings, as_of=now)
+
+    @staticmethod
     def _ensure_session_has_no_overlap(
         uow: UnitOfWork, start: datetime, end: datetime, excluded_id: SessionId | None = None
     ) -> None:
@@ -1210,6 +1201,18 @@ class TimeTrackingApplicationService:
     def _restore_session_snapshot(
         session: WorkSession, snapshot: dict[str, object], now: datetime
     ) -> None:
+        try:
+            TimeTrackingApplicationService._apply_session_snapshot(session, snapshot, now)
+            session.__post_init__()
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidIntervalError(
+                "The saved work-session version has invalid fields."
+            ) from error
+
+    @staticmethod
+    def _apply_session_snapshot(
+        session: WorkSession, snapshot: dict[str, object], now: datetime
+    ) -> None:
         session.actual_started_at = datetime.fromisoformat(str(snapshot["actual_started_at"]))
         session.actual_ended_at = TimeTrackingApplicationService._optional_time(
             snapshot, "actual_ended_at"
@@ -1235,6 +1238,18 @@ class TimeTrackingApplicationService:
 
     @staticmethod
     def _restore_deduction_snapshot(
+        deduction: Deduction, snapshot: dict[str, object], now: datetime
+    ) -> None:
+        try:
+            TimeTrackingApplicationService._apply_deduction_snapshot(deduction, snapshot, now)
+            deduction.__post_init__()
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidIntervalError(
+                "The saved lunch or break version has invalid fields."
+            ) from error
+
+    @staticmethod
+    def _apply_deduction_snapshot(
         deduction: Deduction, snapshot: dict[str, object], now: datetime
     ) -> None:
         deduction.actual_started_at = datetime.fromisoformat(str(snapshot["actual_started_at"]))

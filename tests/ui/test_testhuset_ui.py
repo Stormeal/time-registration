@@ -3,10 +3,12 @@
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
+import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt, QTime
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox, QScrollArea
 
+from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import ManualWorkSessionCommand, UpdateDayDetailsCommand
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
@@ -26,17 +28,17 @@ from qi_flow.ui.timesheet_page import TimesheetPage
 
 class Clock:
     def now(self):
-        return datetime(2026, 9, 17, tzinfo=UTC)
+        return datetime(2026, 9, 18, tzinfo=UTC)
 
 
-def build(tmp_path):
+def build(tmp_path, service_type=TesthusetService):
     database = SQLiteDatabase(tmp_path / "time.sqlite3")
     database.initialize()
     cache = JsonTaskCache(tmp_path / "testhuset-projects.json")
     task = ProjectTask("11-22", "Example", "Testing")
     cache.replace((task,))
     ids = UuidIdentifierGenerator()
-    service = TesthusetService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    service = service_type(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
     service.set_default(task.id)
     tracking = TimeTrackingApplicationService(lambda: SQLiteUnitOfWork(database), Clock(), ids)
     session = tracking.add_manual_session(
@@ -338,8 +340,9 @@ def test_correction_close_confirms_unsaved_interval(qtbot, tmp_path, monkeypatch
     assert not dialog.isVisible()
 
 
-def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:
-    service, _, _, task = build(tmp_path)
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+def test_no_writes_before_fill_confirmation(qtbot, tmp_path, service_type) -> None:
+    service, _, _, task = build(tmp_path, service_type)
     writes = []
     closed = []
 
@@ -354,6 +357,9 @@ def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:
         def write_verified(self, slot):
             writes.append(slot)
 
+        def commit_verified(self):
+            pass
+
     @contextmanager
     def factory(cancelled, status):
         try:
@@ -366,9 +372,10 @@ def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:
     assert dialog._fill.toolTip() == "The weekly review is loading."
     qtbot.waitUntil(lambda: bool(dialog._choices))
     assert writes == []
+    assert not dialog._fill.isEnabled()
+    assert dialog._choices[0].currentData() is None
+    dialog._choices[0].setCurrentIndex(1)
     assert dialog._fill.isEnabled()
-    assert dialog._fill.toolTip() == ""
-    assert dialog._choices[0].currentData() is True
     assert writes == []
     qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: not dialog._worker.isRunning())
@@ -376,8 +383,9 @@ def test_no_writes_before_fill_confirmation(qtbot, tmp_path) -> None:
     assert closed == [True]
 
 
-def test_preview_allows_keeping_a_differing_testhuset_value(qtbot, tmp_path) -> None:
-    service, _, _, task = build(tmp_path)
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+def test_preview_allows_keeping_a_differing_external_value(qtbot, tmp_path, service_type) -> None:
+    service, _, _, task = build(tmp_path, service_type)
     writes = []
 
     class Sheet:
@@ -390,6 +398,9 @@ def test_preview_allows_keeping_a_differing_testhuset_value(qtbot, tmp_path) -> 
         def write_verified(self, slot):
             writes.append(slot)
 
+        def commit_verified(self):
+            pass
+
     @contextmanager
     def factory(cancelled, status):
         yield Sheet()
@@ -397,15 +408,17 @@ def test_preview_allows_keeping_a_differing_testhuset_value(qtbot, tmp_path) -> 
     dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
     qtbot.addWidget(dialog)
     qtbot.waitUntil(lambda: bool(dialog._choices))
-    dialog._choices[0].setCurrentIndex(1)
-    assert dialog._choices[0].currentData() is False
+    dialog._choices[0].setCurrentIndex(2)
     qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: not dialog._worker.isRunning())
     assert writes == []
 
 
-def test_cancel_preview_closes_temporary_session_without_writes(qtbot, tmp_path) -> None:
-    service, _, _, task = build(tmp_path)
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+def test_cancel_preview_closes_temporary_session_without_writes(
+    qtbot, tmp_path, service_type
+) -> None:
+    service, _, _, task = build(tmp_path, service_type)
     closed = []
 
     class Sheet:
@@ -431,3 +444,129 @@ def test_cancel_preview_closes_temporary_session_without_writes(qtbot, tmp_path)
     dialog.reject()
     qtbot.waitUntil(lambda: not dialog._worker.isRunning())
     assert closed == [True]
+
+
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+def test_every_differing_row_requires_a_choice_and_unselection_disables_fill(
+    qtbot, tmp_path, service_type
+) -> None:
+    service, tracking, _, task = build(tmp_path, service_type)
+    for day in (15, 16, 17):
+        tracking.add_manual_session(
+            ManualWorkSessionCommand(
+                datetime(2026, 9, day, 7, tzinfo=UTC),
+                datetime(2026, 9, day, 14, 45, tzinfo=UTC),
+            )
+        )
+    writes = []
+    values = {14: "", 15: "0.00", 16: "2,00", 17: "7,75"}
+
+    class Sheet:
+        def scan(self, week):
+            return (task,)
+
+        def read(self, slot):
+            return values[slot.work_date.day]
+
+        def write_verified(self, slot):
+            writes.append(slot)
+
+    @contextmanager
+    def factory(cancelled, status):
+        yield Sheet()
+
+    dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
+    qtbot.addWidget(dialog)
+    try:
+        qtbot.waitUntil(lambda: dialog._table.rowCount() == 4)
+        assert set(dialog._choices) == {0, 1, 2}
+        assert all(choice.currentData() is None for choice in dialog._choices.values())
+        assert not dialog._fill.isEnabled()
+        assert dialog._table.cellWidget(3, 4) is None
+        for row in (0, 1):
+            dialog._choices[row].setCurrentIndex(1)
+            assert not dialog._fill.isEnabled()
+        dialog._choices[2].setCurrentIndex(2)
+        assert dialog._fill.isEnabled()
+        dialog._choices[1].setCurrentIndex(0)
+        assert not dialog._fill.isEnabled()
+        qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
+        assert not dialog._worker.confirmed
+        assert writes == []
+        dialog._choices[1].setCurrentIndex(2)
+        assert dialog._fill.isEnabled()
+    finally:
+        dialog.reject()
+        qtbot.waitUntil(lambda: not dialog._worker.isRunning())
+
+
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+def test_matching_rows_need_no_decision_and_are_never_written(qtbot, tmp_path, service_type):
+    service, _, _, task = build(tmp_path, service_type)
+
+    class Sheet:
+        def scan(self, week):
+            return (task,)
+
+        def read(self, slot):
+            return "7,75"
+
+        def write_verified(self, slot):
+            raise AssertionError("Matching rows must not be written")
+
+    @contextmanager
+    def factory(cancelled, status):
+        yield Sheet()
+
+    dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._table.rowCount() == 1)
+    assert dialog._choices == {}
+    assert dialog._fill.isEnabled()
+    qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: not dialog._worker.isRunning())
+
+
+@pytest.mark.parametrize("service_type", [TesthusetService, DsbService])
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
+def test_fill_failure_closes_browser_and_requires_a_new_review(
+    qtbot, tmp_path, service_type, error_type
+):
+    service, _, _, task = build(tmp_path, service_type)
+    attempts = []
+    closed = []
+
+    class Sheet:
+        def scan(self, week):
+            return (task,)
+
+        def read(self, slot):
+            return ""
+
+        def write_verified(self, slot):
+            attempts.append(slot)
+            raise error_type("Uncertain save")
+
+        def commit_verified(self):
+            raise AssertionError("Failed batch must never be sent")
+
+    @contextmanager
+    def factory(cancelled, status):
+        try:
+            yield Sheet()
+        finally:
+            closed.append(True)
+
+    dialog = TesthusetDialog(service, factory, IsoWeek(2026, 38))
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: bool(dialog._choices))
+    dialog._choices[0].setCurrentIndex(1)
+    qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: not dialog._worker.isRunning())
+    qtbot.waitUntil(lambda: "new preview" in dialog._status.text().lower())
+    assert len(attempts) == 1
+    assert closed == [True]
+    assert not dialog._fill.isEnabled()
+    assert not dialog._table.isEnabled()
+    qtbot.mouseClick(dialog._fill, Qt.MouseButton.LeftButton)
+    assert len(attempts) == 1

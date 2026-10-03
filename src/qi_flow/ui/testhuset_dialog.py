@@ -19,7 +19,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from qi_flow.application.testhuset import FillPreview, TesthusetService, WeeklySheet
+from qi_flow.application.testhuset import (
+    FillDecision,
+    FillDecisions,
+    FillPreview,
+    TesthusetService,
+    WeeklySheet,
+)
 from qi_flow.domain.models import IsoWeek
 
 SheetFactory = Callable[[Event, Callable[[str], None]], AbstractContextManager[WeeklySheet]]
@@ -44,10 +50,11 @@ class TesthusetWorker(QThread):
         self.scan_only = scan_only
         self.cancelled = Event()
         self.decision = Event()
-        self.replace: frozenset[int] = frozenset()
+        self.choices: FillDecisions = {}
         self.confirmed = False
 
     def run(self) -> None:
+        fill_started = False
         try:
             with self.factory(self.cancelled, self.status.emit) as sheet:
                 if self.scan_only:
@@ -63,7 +70,8 @@ class TesthusetWorker(QThread):
                         self.outcome.emit("Cancelled. No fill was started.")
                         return
                     self.status.emit("Verifying the preview and saving confirmed slots…")
-                    result = self.service.fill(sheet, preview, self.replace, confirmed=True)
+                    fill_started = True
+                    result = self.service.fill(sheet, preview, self.choices, confirmed=True)
                     message = (
                         f"Verified {result.changed} changed slots; kept {result.kept}; "
                         f"{result.matched} already matched. Closing the week remains a manual "
@@ -71,14 +79,23 @@ class TesthusetWorker(QThread):
                     )
             self.outcome.emit(message)
         except ValueError as error:
-            self.outcome.emit(str(error))
+            message = str(error)
+            if fill_started:
+                message += " Prepare a new preview before filling again."
+            self.outcome.emit(message)
         except Exception as error:
             # Do not expose external/browser errors or work contents in diagnostics.
             _LOG.warning("%s operation failed (%s)", self.service.destination, type(error).__name__)
-            self.outcome.emit(
-                f"{self.service.destination} operation failed before a preview could be prepared. "
-                "Check the QI Flow diagnostic log for the failure type, then rescan."
-            )
+            if fill_started:
+                self.outcome.emit(
+                    f"{self.service.destination} fill stopped; some saves may have completed. "
+                    "Prepare a new preview to review destination values before filling again."
+                )
+            else:
+                self.outcome.emit(
+                    f"{self.service.destination} operation failed before a preview could be "
+                    "prepared. Check the QI Flow diagnostic log for the failure type, then rescan."
+                )
 
 
 class TesthusetDialog(QDialog):
@@ -128,6 +145,7 @@ class TesthusetDialog(QDialog):
             "Review every differing slot, then confirm the fill. Only listed slots are affected. "
             "Closing the week remains manual."
         )
+        self._choices.clear()
         self._table.setRowCount(len(preview.slots))
         for row, item in enumerate(preview.slots):
             for column, value in enumerate(
@@ -143,8 +161,9 @@ class TesthusetDialog(QDialog):
                 self._table.setItem(row, 4, QTableWidgetItem("Already matches"))
             else:
                 choice = QComboBox()
-                choice.addItem("Replace with QI Flow value", True)
-                choice.addItem(f"Keep {self._worker.service.destination} value", False)
+                choice.addItem("Choose Keep or Replace...", None)
+                choice.addItem("Replace with QI Flow value", FillDecision.REPLACE)
+                choice.addItem(f"Keep {self._worker.service.destination} value", FillDecision.KEEP)
                 choice.currentIndexChanged.connect(self._validate_choices)
                 self._choices[row] = choice
                 self._table.setCellWidget(row, 4, choice)
@@ -152,7 +171,9 @@ class TesthusetDialog(QDialog):
         self._validate_choices()
 
     def _validate_choices(self) -> None:
-        can_fill = all(choice.currentData() is not None for choice in self._choices.values())
+        can_fill = all(
+            isinstance(choice.currentData(), FillDecision) for choice in self._choices.values()
+        )
         self._fill.setEnabled(can_fill)
         self._fill.setToolTip(
             "" if can_fill else "Choose whether to keep or replace each differing existing value."
@@ -164,9 +185,7 @@ class TesthusetDialog(QDialog):
         self._fill.setEnabled(False)
         self._fill.setToolTip("The confirmed timesheet fill is running.")
         self._table.setEnabled(False)
-        self._worker.replace = frozenset(
-            row for row, choice in self._choices.items() if choice.currentData() is True
-        )
+        self._worker.choices = {row: choice.currentData() for row, choice in self._choices.items()}
         self._worker.confirmed = True
         self._worker.decision.set()
 

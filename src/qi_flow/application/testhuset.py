@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from typing import Protocol
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
@@ -12,6 +13,14 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import IsoWeek, SessionId, WorkSession
 from qi_flow.domain.testhuset import ProjectTask, decimal_hours, parse_hours
 from qi_flow.domain.time_rules import COPENHAGEN, split_at_local_midnight
+
+
+class FillDecision(Enum):
+    KEEP = "keep"
+    REPLACE = "replace"
+
+
+FillDecisions = Mapping[int, FillDecision]
 
 
 class TaskCache(Protocol):
@@ -96,6 +105,7 @@ class TesthusetService:
         self.destination = destination
         self._settings_prefix = settings_prefix
         self._assignment_attribute = assignment_attribute
+        self._latest_preview: FillPreview | None = None
 
     def tasks(self) -> tuple[ProjectTask, ...]:
         return self._cache.load()
@@ -208,29 +218,31 @@ class TesthusetService:
         )
 
     def preview(self, sheet: WeeklySheet, week: IsoWeek) -> FillPreview:
+        self._latest_preview = None
         self.scan(sheet, week)
+        return self._read_preview(sheet, week)
+
+    def _read_preview(self, sheet: WeeklySheet, week: IsoWeek) -> FillPreview:
+        self._latest_preview = None
         slots = tuple(PreviewSlot(slot, sheet.read(slot)) for slot in self.proposed_slots(week))
         for slot in slots:
             parse_hours(slot.existing)
             parse_hours(slot.proposed.hours)
         if not slots:
             raise ValueError("There is no completed work in the selected week.")
-        return FillPreview(week, slots)
+        preview = FillPreview(week, slots)
+        self._latest_preview = preview
+        return preview
 
     def fill(
         self,
         sheet: WeeklySheet,
         preview: FillPreview,
-        replace: frozenset[int],
+        decisions: FillDecisions,
         *,
         confirmed: bool,
     ) -> FillResult:
-        if not confirmed:
-            raise ValueError(
-                f"Confirm Fill {self.destination} timesheet before changing any hours."
-            )
-        if not replace <= set(range(len(preview.slots))):
-            raise ValueError("Invalid conflict selection.")
+        choices = self._begin_fill(preview, decisions, confirmed=confirmed)
         # Reconcile again before the first write; never apply an obsolete preview.
         self.scan(sheet, preview.week)
         if self.proposed_slots(preview.week) != tuple(s.proposed for s in preview.slots):
@@ -242,7 +254,7 @@ class TesthusetService:
         for index, item in enumerate(preview.slots):
             if item.matches:
                 matched += 1
-            elif index not in replace:
+            elif choices[index] is FillDecision.KEEP:
                 kept += 1
             else:
                 if parse_hours(sheet.read(item.proposed)) != parse_hours(item.existing):
@@ -250,3 +262,27 @@ class TesthusetService:
                 sheet.write_verified(item.proposed)
                 changed += 1
         return FillResult(changed, kept, matched)
+
+    def _begin_fill(
+        self, preview: FillPreview, decisions: FillDecisions, *, confirmed: bool
+    ) -> dict[int, FillDecision]:
+        if not confirmed:
+            raise ValueError(
+                f"Confirm Fill {self.destination} timesheet before changing any hours."
+            )
+        differing = {index for index, item in enumerate(preview.slots) if not item.matches}
+        if not isinstance(decisions, Mapping):
+            raise ValueError("Choose Keep or Replace for every differing slot decision.")
+        choices = dict(decisions)
+        if (
+            set(choices) != differing
+            or any(type(index) is not int for index in choices)
+            or any(not isinstance(value, FillDecision) for value in choices.values())
+        ):
+            raise ValueError("Choose Keep or Replace for every differing slot decision.")
+        if preview is not self._latest_preview:
+            raise ValueError("This review is no longer current. Prepare a new preview.")
+        # Every confirmed attempt needs a fresh review afterwards, even if a save's
+        # outcome is uncertain and the remote value still appears unchanged.
+        self._latest_preview = None
+        return choices

@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import ManualWorkSessionCommand
-from qi_flow.application.testhuset import HourSlot
+from qi_flow.application.testhuset import FillDecision, HourSlot
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import IsoWeek
 from qi_flow.domain.testhuset import ProjectTask
@@ -232,7 +232,7 @@ def test_rejected_reordering_during_fill_never_sends(edge_page, tmp_path, monkey
     preview = dsb.preview(adapter, IsoWeek(2026, 38))
 
     with pytest.raises(ValueError, match="did not accept"):
-        dsb.fill(adapter, preview, frozenset({0}), confirmed=True)
+        dsb.fill(adapter, preview, {0: FillDecision.REPLACE}, confirmed=True)
 
     edge_page.wait_for_timeout(50)
     assert intercepted == ["3,00"]

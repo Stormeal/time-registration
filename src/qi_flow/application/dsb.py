@@ -4,9 +4,10 @@ from collections.abc import Callable
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
 from qi_flow.application.testhuset import (
+    FillDecision,
+    FillDecisions,
     FillPreview,
     FillResult,
-    PreviewSlot,
     TaskCache,
     TesthusetService,
     WeeklySheet,
@@ -45,27 +46,18 @@ class DsbService(TesthusetService):
 
     def preview(self, sheet: WeeklySheet, week: IsoWeek) -> FillPreview:
         """Read the reviewed DSB week through Overview using the latest explicit allocation scan."""
-        slots = tuple(PreviewSlot(slot, sheet.read(slot)) for slot in self.proposed_slots(week))
-        for slot in slots:
-            parse_hours(slot.existing)
-            parse_hours(slot.proposed.hours)
-        if not slots:
-            raise ValueError("There is no completed work in the selected week.")
-        return FillPreview(week, slots)
+        return self._read_preview(sheet, week)
 
     def fill(
         self,
         sheet: WeeklySheet,
         preview: FillPreview,
-        replace: frozenset[int],
+        decisions: FillDecisions,
         *,
         confirmed: bool,
     ) -> FillResult:
         """Fill DSB entries, then explicitly send the reviewed batch to DSB."""
-        if not confirmed:
-            raise ValueError("Confirm Fill DSB timesheet before changing any hours.")
-        if not replace <= set(range(len(preview.slots))):
-            raise ValueError("Invalid conflict selection.")
+        choices = self._begin_fill(preview, decisions, confirmed=confirmed)
         if self.proposed_slots(preview.week) != tuple(slot.proposed for slot in preview.slots):
             raise ValueError("Local hours or task mappings changed. Prepare a new preview.")
         for item in preview.slots:
@@ -75,7 +67,7 @@ class DsbService(TesthusetService):
         for index, item in enumerate(preview.slots):
             if item.matches:
                 matched += 1
-            elif index not in replace:
+            elif choices[index] is FillDecision.KEEP:
                 kept += 1
             else:
                 if parse_hours(sheet.read(item.proposed)) != parse_hours(item.existing):

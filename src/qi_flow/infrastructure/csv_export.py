@@ -11,7 +11,7 @@ from pathlib import Path
 from qi_flow.application.dto import DaySummaryView
 from qi_flow.application.ports import UnitOfWork
 from qi_flow.domain.models import DeductionKind
-from qi_flow.domain.time_rules import COPENHAGEN
+from qi_flow.domain.time_rules import COPENHAGEN, local_day_bounds, split_at_local_midnight
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,27 +80,33 @@ class CsvTimesheetExporter:
                 )
 
     def _detailed_rows(self, start_date: date, end_date: date) -> list[DetailedExportRow]:
-        start = datetime.combine(start_date, datetime.min.time(), COPENHAGEN)
-        end = datetime.combine(end_date, datetime.min.time(), COPENHAGEN)
+        start, _ = local_day_bounds(start_date)
+        end, _ = local_day_bounds(end_date)
         rows: list[DetailedExportRow] = []
         with self._uow_factory() as uow:
             for session in uow.sessions.list_intersecting(start, end):
-                if session.effective_started_at is None or session.effective_ended_at is None:
+                if session.actual_ended_at is None:
                     continue
-                rows.append(
-                    self._row("Arbejde", session.effective_started_at, session.effective_ended_at)
+                work_start = max(start, session.effective_started_at or session.actual_started_at)
+                work_end = min(end, session.effective_ended_at or session.actual_ended_at)
+                rows.extend(
+                    self._row("Arbejde", piece_start, piece_end)
+                    for piece_start, piece_end in split_at_local_midnight(work_start, work_end)
                 )
                 for deduction in uow.deductions.list_for_session(session.id):
-                    if (
-                        deduction.deleted_at is not None
-                        or deduction.effective_started_at is None
-                        or deduction.effective_ended_at is None
-                    ):
+                    if deduction.deleted_at is not None or deduction.actual_ended_at is None:
                         continue
                     kind = "Frokost" if deduction.kind is DeductionKind.LUNCH else "Pause"
-                    rows.append(
-                        self._row(
-                            kind, deduction.effective_started_at, deduction.effective_ended_at
+                    deduction_start = max(
+                        work_start, deduction.effective_started_at or deduction.actual_started_at
+                    )
+                    deduction_end = min(
+                        work_end, deduction.effective_ended_at or deduction.actual_ended_at
+                    )
+                    rows.extend(
+                        self._row(kind, piece_start, piece_end)
+                        for piece_start, piece_end in split_at_local_midnight(
+                            deduction_start, deduction_end
                         )
                     )
         return sorted(rows, key=lambda row: (row.started_at, row.kind))

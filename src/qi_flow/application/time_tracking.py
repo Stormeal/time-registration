@@ -54,6 +54,7 @@ from qi_flow.domain.time_rules import (
     began_on_previous_local_day,
     effective_interval,
     effective_work_interval,
+    local_day_bounds,
     net_seconds,
     split_at_local_midnight,
 )
@@ -409,8 +410,7 @@ class TimeTrackingApplicationService:
 
     def completed_sessions_for_day(self, work_date: date) -> list[WorkSession]:
         """Return completed sessions intersecting a Copenhagen calendar day."""
-        start = datetime.combine(work_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = start + timedelta(days=1)
+        start, end = local_day_bounds(work_date)
         with self._uow_factory() as uow:
             sessions = uow.sessions.list_intersecting(start, end)
         return [session for session in sessions if session.actual_ended_at is not None]
@@ -638,8 +638,8 @@ class TimeTrackingApplicationService:
         return isinstance(notified, dict) and notified.get("session_id") == str(session_id)
 
     def _summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
-        start = datetime.combine(start_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = datetime.combine(end_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        start, _ = local_day_bounds(start_date)
+        end, _ = local_day_bounds(end_date)
         now = self._when(None)
         totals: dict[date, _DayTotal] = {
             current: _DayTotal()

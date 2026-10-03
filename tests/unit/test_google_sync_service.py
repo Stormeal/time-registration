@@ -6,6 +6,8 @@ from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
+import pytest
+
 from qi_flow.application.google_sync_service import GoogleSyncService
 from qi_flow.application.ports import UnitOfWork as UnitOfWorkPort
 from qi_flow.domain.models import (
@@ -86,16 +88,20 @@ class UnitOfWork(AbstractContextManager[object]):
 class Gateway:
     def __init__(self, records: list[dict[str, Any]]) -> None:
         self.records = records
+        self.read_calls = 0
+        self.write_calls = 0
 
     def read_records(self) -> list[dict[str, Any]]:
+        self.read_calls += 1
         return self.records
 
     def replace_records(self, records: list[dict[str, Any]]) -> int:
+        self.write_calls += 1
         self.records = records
         return len(records)
 
 
-def test_fresh_machine_imports_legacy_sheet_records_without_erasing_them() -> None:
+def test_legacy_mapper_remains_available_for_explicit_migration() -> None:
     remote = [
         {
             "kind": "work_session",
@@ -114,26 +120,27 @@ def test_fresh_machine_imports_legacy_sheet_records_without_erasing_them() -> No
     gateway = Gateway(remote)
     service = GoogleSyncService(lambda: cast(UnitOfWorkPort, unit_of_work), gateway)
 
-    synced = service.sync_completed_records()
+    mapped = service._session_from_record(remote[0])
 
-    assert synced == 1
-    assert [session.id for session in unit_of_work.sessions.items] == [SessionId("shared-session")]
+    assert mapped.id == SessionId("shared-session")
+    assert mapped.source == EntrySource.MANUAL
+    assert unit_of_work.sessions.items == []
     assert gateway.records[0]["id"] == "shared-session"
-    assert gateway.records[0]["payload"]["source"] == "manual"
+    assert gateway.read_calls == gateway.write_calls == 0
 
 
-def test_manual_timesheet_day_details_are_synchronized() -> None:
+def test_legacy_day_serializer_remains_available_for_reviewed_migration() -> None:
     unit_of_work = UnitOfWork()
     unit_of_work.days.save(DayDetails(date(2026, 9, 17), WorkLocation.OFFICE, "Workshop", 2))
     gateway = Gateway([])
     service = GoogleSyncService(lambda: cast(UnitOfWorkPort, unit_of_work), gateway)
 
-    assert service.sync_completed_records() == 1
-    assert gateway.records[0]["kind"] == "day_details"
-    assert gateway.records[0]["payload"] == {"location": "office", "note": "Workshop"}
+    records = service._local_records(cast(UnitOfWorkPort, unit_of_work))
+    assert records[0]["kind"] == "day_details"
+    assert records[0]["payload"] == {"location": "office", "note": "Workshop"}
 
 
-def test_manual_work_session_is_synchronized() -> None:
+def test_legacy_session_serializer_remains_available_for_reviewed_migration() -> None:
     unit_of_work = UnitOfWork()
     unit_of_work.sessions.add(
         WorkSession(
@@ -147,6 +154,35 @@ def test_manual_work_session_is_synchronized() -> None:
     )
     gateway = Gateway([])
 
-    GoogleSyncService(lambda: cast(UnitOfWorkPort, unit_of_work), gateway).sync_completed_records()
+    service = GoogleSyncService(lambda: cast(UnitOfWorkPort, unit_of_work), gateway)
+    records = service._local_records(cast(UnitOfWorkPort, unit_of_work))
 
-    assert gateway.records[0]["payload"]["source"] == "manual"
+    assert records[0]["payload"]["source"] == "manual"
+
+
+def test_public_v1_sync_requires_upgrade_before_any_gateway_or_local_access() -> None:
+    unit_of_work = UnitOfWork()
+    unit_of_work.days.save(DayDetails(date(2026, 9, 17), WorkLocation.OFFICE, "Keep local", 2))
+    gateway = Gateway(
+        [
+            {
+                "kind": "day_details",
+                "id": "2026-09-17",
+                "revision": 3,
+                "payload": {"location": "remote", "note": "Keep remote"},
+            }
+        ]
+    )
+    opened = 0
+
+    def open_uow() -> UnitOfWorkPort:
+        nonlocal opened
+        opened += 1
+        return cast(UnitOfWorkPort, unit_of_work)
+
+    service = GoogleSyncService(open_uow, gateway)
+    with pytest.raises(ValueError, match=r"upgrade|Upgrade"):
+        service.sync_completed_records()
+    assert opened == gateway.read_calls == gateway.write_calls == 0
+    assert unit_of_work.days.items[0].note == "Keep local"
+    assert gateway.records[0]["payload"]["note"] == "Keep remote"

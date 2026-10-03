@@ -33,7 +33,7 @@ def test_initialize_applies_initial_schema(tmp_path: Path) -> None:
         "settings",
         "audit_entries",
     } <= tables
-    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6]
+    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_legacy_default_weekly_target_is_migrated_to_37_hours(tmp_path: Path) -> None:

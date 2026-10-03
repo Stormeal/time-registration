@@ -27,6 +27,10 @@ class GoogleSyncConflictError(ValueError):
     """Raised when two machines changed the same revision differently."""
 
 
+class GoogleSyncUpgradeRequiredError(ValueError):
+    """Legacy snapshot synchronization is contained until reviewed V2 migration."""
+
+
 def _stamp(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat() if value is not None else None
 
@@ -93,20 +97,11 @@ class GoogleSyncService:
         self._uow_factory, self._gateway = uow_factory, gateway
 
     def sync_completed_records(self) -> int:
-        """Merge remote and local records before replacing the remote collection.
-
-        A fresh machine imports shared history before it writes anything, so an empty
-        local database cannot erase the sheet.
-        """
-        remote_records = self._gateway.read_records()
-        with self._uow_factory() as uow:
-            local_records = self._local_records(uow)
-            merged = self._merge(local_records, remote_records)
-            self._apply_remote_records(uow, merged)
-            # Re-serialize imported legacy rows so the next machine receives the
-            # complete current payload instead of the old minimal format.
-            merged = self._merge(self._local_records(uow), merged)
-        return self._gateway.replace_records(merged)
+        """Refuse the unsafe snapshot protocol before reading or mutating any state."""
+        raise GoogleSyncUpgradeRequiredError(
+            "Google sync requires an upgrade and a reviewed V2 migration before syncing. "
+            "Local time tracking remains available; keep your existing sheet for migration."
+        )
 
     @staticmethod
     def _local_records(uow: UnitOfWork) -> list[dict[str, Any]]:

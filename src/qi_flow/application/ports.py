@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
 from types import TracebackType
 from typing import Any, Protocol, Self
 
+from qi_flow.application.sync_models import (
+    EntityKey,
+    SyncChange,
+    SyncConflict,
+    SyncProblem,
+    SyncPublication,
+    SyncTarget,
+)
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -31,6 +40,12 @@ class IdentifierGenerator(Protocol):
     def deduction_id(self) -> DeductionId: ...
 
     def audit_id(self) -> str: ...
+
+    def change_id(self) -> str: ...
+
+    def group_id(self) -> str: ...
+
+    def conflict_id(self) -> str: ...
 
 
 class WorkSessionRepository(Protocol):
@@ -99,6 +114,66 @@ class WeeklyTargetRepository(Protocol):
     def save(self, target: WeeklyTarget, updated_at: datetime) -> None: ...
 
 
+class SyncGateway(Protocol):
+    """One immutable destination; invalid rows accompany valid observations."""
+
+    def read_changes(self) -> tuple[SyncChange, ...]: ...
+
+    def read_problems(self) -> tuple[SyncProblem, ...]:
+        """Return raw issues from the most recent read, without another network request."""
+        ...
+
+    def append_changes(self, changes: Sequence[SyncChange]) -> None: ...
+
+
+class SyncRepository(Protocol):
+    """Target-bound durable state; mutations share the enclosing local transaction."""
+
+    def pending(self) -> tuple[SyncChange, ...]: ...
+
+    def observed(self) -> tuple[SyncChange, ...]:
+        """All known graph changes, including locally authored changes."""
+        ...
+
+    def enqueue(self, changes: Sequence[SyncChange]) -> None: ...
+
+    def observe(self, changes: Sequence[SyncChange]) -> None:
+        """Stage even incomplete groups; quarantine differing duplicate IDs without raising."""
+        ...
+
+    def acknowledge(self, change_ids: Sequence[str]) -> None:
+        """Only after caller readback verification of exact pending complete groups."""
+        ...
+
+    def save_conflict(self, conflict: SyncConflict) -> None: ...
+
+    def close_conflict(self, conflict_id: str, reviewed_head_ids: frozenset[str]) -> None: ...
+
+    def conflicts(self) -> tuple[SyncConflict, ...]: ...
+
+    def heads(self, entity_key: EntityKey) -> tuple[str, ...]:
+        """Materialized local payload provenance, not every observed graph tip."""
+        ...
+
+    def set_heads(self, entity_key: EntityKey, head_ids: Sequence[str]) -> None: ...
+
+    def publication(self, change_id: str) -> SyncPublication: ...
+
+    def defer(self, change_ids: Sequence[str], not_before: datetime) -> None: ...
+
+    def mark_attempted(self, change_ids: Sequence[str]) -> None:
+        """Commit before network publication; never reset on timeout, retry, or restart."""
+        ...
+
+    def get_state(self, key: str) -> object: ...
+
+    def set_state(self, key: str, value: object) -> None: ...
+
+    def record_problem(self, problem: SyncProblem) -> None: ...
+
+    def problems(self) -> tuple[SyncProblem, ...]: ...
+
+
 class UnitOfWork(Protocol):
     """Atomic persistence boundary for one application operation."""
 
@@ -108,6 +183,8 @@ class UnitOfWork(Protocol):
     settings: SettingsRepository
     audit: AuditRepository
     weekly_targets: WeeklyTargetRepository
+
+    def sync_for(self, target: SyncTarget) -> SyncRepository: ...
 
     def __enter__(self) -> Self: ...
 

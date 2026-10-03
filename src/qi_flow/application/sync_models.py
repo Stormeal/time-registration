@@ -365,6 +365,30 @@ class SyncReviewError(ValueError):
     """Conflict heads changed after the user reviewed them."""
 
 
+@dataclass(frozen=True)
+class SyncConflictReview:
+    conflict: SyncConflict
+    local_payloads: Mapping[EntityKey, Mapping[str, object] | None]
+    local_heads: Mapping[EntityKey, tuple[str, ...]]
+    local_fingerprint: str
+    bases: tuple[SyncChange, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "local_payloads",
+            MappingProxyType(
+                {
+                    key: cast(Mapping[str, object], freeze_json(payload))
+                    if payload is not None
+                    else None
+                    for key, payload in self.local_payloads.items()
+                }
+            ),
+        )
+        object.__setattr__(self, "local_heads", MappingProxyType(dict(self.local_heads)))
+
+
 class SyncJobObsoleteError(ValueError):
     """The destination or consent changed after this job was created."""
 

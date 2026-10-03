@@ -1,26 +1,32 @@
 """Conflict-safe synchronization of completed records through a gateway."""
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, SyncGateway, UnitOfWork
 from qi_flow.application.sync_capture import active_target
 from qi_flow.application.sync_models import (
+    EntityKey,
     SyncChange,
+    SyncConflictReview,
     SyncContentError,
     SyncJobCancelledError,
     SyncJobObsoleteError,
     SyncProblem,
+    SyncReviewError,
     SyncTarget,
     canonical_json,
+    finalize_group,
     utc_instant,
     validate_group,
 )
+from qi_flow.application.sync_payloads import day_payload, deduction_payload, session_payload
 from qi_flow.application.sync_reconciliation import SyncReconciler
+from qi_flow.domain.interval_validation import validate_intervals
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -201,6 +207,157 @@ class SyncService(SyncPublicationService):
         self._reconciler = SyncReconciler(
             uow_factory, target, clock, identifiers, generation=generation
         )
+        self._identifiers = identifiers
+        self._reviews: dict[str, SyncConflictReview] = {}
+
+    @staticmethod
+    def _local_payloads(uow: UnitOfWork) -> dict[EntityKey, Mapping[str, object] | None]:
+        records: dict[EntityKey, Mapping[str, object] | None] = {
+            ("work_session", str(s.id)): None if s.deleted_at else session_payload(s)
+            for s in uow.sessions.list_all()
+        }
+        records.update(
+            {
+                ("deduction", str(d.id)): None if d.deleted_at else deduction_payload(d)
+                for d in uow.deductions.list_all()
+            }
+        )
+        records.update(
+            {("day_details", d.work_date.isoformat()): day_payload(d) for d in uow.days.list_all()}
+        )
+        return records
+
+    @classmethod
+    def _local_fingerprint(cls, uow: UnitOfWork) -> str:
+        records = [
+            {"kind": key[0], "id": key[1], "payload": value}
+            for key, value in sorted(cls._local_payloads(uow).items())
+        ]
+        return hashlib.sha256(canonical_json(records).encode("utf-8")).hexdigest()
+
+    def review(self, conflict_id: str) -> SyncConflictReview:
+        self._reconciler.reconcile()
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            repo = uow.sync_for(self._target)
+            conflict = next((c for c in repo.conflicts() if c.conflict_id == conflict_id), None)
+            if conflict is None:
+                raise SyncReviewError("Conflict changed; open the current review.")
+            local = self._local_payloads(uow)
+            ancestors = {parent for change in conflict.changes for parent in change.parent_ids}
+            ancestors.update(
+                head
+                for change in conflict.changes
+                for heads in change.aggregate_base_heads.values()
+                for head in heads
+            )
+            review = SyncConflictReview(
+                conflict,
+                {key: local.get(key) for key in conflict.entity_keys},
+                {key: repo.heads(key) for key in conflict.entity_keys},
+                self._local_fingerprint(uow),
+                tuple(c for c in repo.observed() if c.change_id in ancestors),
+            )
+        self._reviews[conflict_id] = review
+        return review
+
+    def resolve(
+        self,
+        conflict_id: str,
+        reviewed_head_ids: frozenset[str],
+        chosen_payloads: Mapping[EntityKey, Mapping[str, object] | None],
+    ) -> None:
+        """A resolution is one atomic command descending from every reviewed version."""
+        # Newly staged observations can invalidate an open dialog. Unseen remote writes
+        # remain independent and become a new conflict on the next pull.
+        self._reconciler.reconcile()
+        review = self._reviews.get(conflict_id)
+        if review is None or review.conflict.head_ids != reviewed_head_ids:
+            raise SyncReviewError("Open a fresh conflict review before choosing a resolution.")
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            repo = uow.sync_for(self._target)
+            current = next((c for c in repo.conflicts() if c.conflict_id == conflict_id), None)
+            if current is None or current.head_ids != reviewed_head_ids:
+                raise SyncReviewError("Conflict heads changed; review every current version.")
+            if set(chosen_payloads) != set(current.entity_keys):
+                raise SyncReviewError("Choose a payload or deletion for every affected entry.")
+            if self._local_fingerprint(uow) != review.local_fingerprint or any(
+                repo.heads(key) != heads for key, heads in review.local_heads.items()
+            ):
+                raise SyncReviewError("The local timesheet changed; open a fresh review.")
+            if repo.problems():
+                raise SyncReviewError("Quarantined sync data must be reviewed before resolution.")
+            now = self._clock.now()
+            sessions = {str(s.id): replace(s) for s in uow.sessions.list_all()}
+            deductions = {str(d.id): replace(d) for d in uow.deductions.list_all()}
+            days = {d.work_date.isoformat(): d for d in uow.days.list_all()}
+            bases = {
+                key: tuple(
+                    sorted(
+                        set(repo.heads(key))
+                        | {c.change_id for c in current.changes if c.entity_key == key}
+                    )
+                )
+                for key in current.entity_keys
+            }
+            device_id = uow.settings.get("sync_device_id")
+            if not isinstance(device_id, str) or not device_id:
+                device_id = self._identifiers.change_id()
+                uow.settings.save("sync_device_id", device_id, now)
+            group_id = self._identifiers.group_id()
+            drafts = [
+                SyncChange(
+                    self._identifiers.change_id(),
+                    2,
+                    key[0],
+                    key[1],
+                    bases[key],
+                    group_id,
+                    (),
+                    "",
+                    bases,
+                    "upsert" if payload is not None else "delete",
+                    payload,
+                    now,
+                    device_id,
+                )
+                for key, payload in sorted(chosen_payloads.items())
+            ]
+            changes = finalize_group(drafts)
+            for change in changes:
+                self._reconciler._apply_candidate(change, sessions, deductions, days, now)
+            for deduction in deductions.values():
+                if (
+                    deduction.deleted_at is None
+                    and (parent := sessions.get(str(deduction.session_id))) is not None
+                    and parent.deleted_at is not None
+                ):
+                    raise SyncReviewError("Delete the affected deductions with their work session.")
+            validate_intervals(tuple(sessions.values()), tuple(deductions.values()), as_of=now)
+            # All validation precedes persistence. The outbox, payloads, heads and conflict
+            # closure share this UoW, including rollback when an insertion/commit fails.
+            repo.enqueue(changes)
+            for change in sorted(changes, key=lambda c: c.entity_kind != "work_session"):
+                key = change.entity_key
+                if key[0] == "work_session" and key[1] in sessions:
+                    if uow.sessions.get(sessions[key[1]].id) is None:
+                        uow.sessions.add(sessions[key[1]])
+                    else:
+                        uow.sessions.save(sessions[key[1]])
+                elif key[0] == "deduction" and key[1] in deductions:
+                    if uow.deductions.get(deductions[key[1]].id) is None:
+                        uow.deductions.add(deductions[key[1]])
+                    else:
+                        uow.deductions.save(deductions[key[1]])
+                elif key[0] == "day_details":
+                    if key[1] in days:
+                        uow.days.save(days[key[1]])
+                    else:
+                        uow.days.delete(date.fromisoformat(key[1]))
+                repo.set_heads(key, (change.change_id,))
+            repo.close_conflict(conflict_id, reviewed_head_ids)
+        self._reviews.pop(conflict_id, None)
 
     def _stage(self, changes: Sequence[SyncChange]) -> bool:
         protocol_blocked = super()._stage(changes)

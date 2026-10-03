@@ -88,6 +88,19 @@ responses, competing initializers and renewed V1 writes. No real workbook was mo
 This completes the migration components; production Settings and owned-worker wiring remain in
 Tasks 11–12. The existing production UI still refuses legacy snapshot synchronization.
 
+## Conflict commands and review verified
+
+The conflict application command and Qt review dialog passed the **586-test quality gate in
+77.47 seconds**, with formatting/lint and strict mypy clean. Reviews show local, competing and
+causal base values. Each entry requires an explicit choice; corrections use the same exact-minute
+Copenhagen date/DST controls as ordinary edits. Invalid incoming dates remain reviewable.
+Resolution validates the whole candidate timesheet and atomically saves payloads, every reviewed
+causal parent, outbox, provenance and conflict closure. Stale local changes or newly observed
+remote heads require a new review; a third writer arriving afterward remains a new conflict.
+
+Task 11's Settings/status/runtime wiring is still open. It will use the bounded owned-worker
+controller in Task 12 rather than connect a new flow to the existing unbounded authorization.
+
 ## Task status
 
 | Plan task | Audit / stories | Status |

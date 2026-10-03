@@ -31,6 +31,34 @@ SEND_CONFIRMATION_MILLISECONDS = 120_000
 NOTIFICATION_SELECTOR = ".sapMMessageToast, .sapMMsgStrip, [role='alert'], [role='status']"
 HOUR_COMMIT_MILLISECONDS = 2_000
 HOUR_COMMIT_POLL_MILLISECONDS = 100
+_DANISH_MONTHS = (
+    "januar",
+    "februar",
+    "marts",
+    "april",
+    "maj",
+    "juni",
+    "juli",
+    "august",
+    "september",
+    "oktober",
+    "november",
+    "december",
+)
+_DANISH_SHORT_MONTHS = (
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "maj",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "okt",
+    "nov",
+    "dec",
+)
 
 
 def safe_page_location(url: str) -> str:
@@ -97,6 +125,18 @@ def hour_value_matches(actual: str, expected: str) -> bool:
         return parse_hours(actual) == parse_hours(expected)
     except ValueError:
         return False
+
+
+def date_heading_matches(heading: str, work_date: date) -> bool:
+    """Match a complete DSB calendar date, including its month across ISO-year boundaries."""
+    day, month, year = work_date.day, work_date.month, work_date.year
+    text = heading.casefold()
+    month_name = re.escape(_DANISH_MONTHS[month - 1])
+    month_short = re.escape(_DANISH_SHORT_MONTHS[month - 1])
+    written = rf"(?<!\d)0?{day}(?:\s*\.\s*|\s+)(?:{month_name}|{month_short}\.?)\s+{year}\b"
+    numeric = rf"(?<!\d)0?{day}[./-]0?{month}[./-]{year}\b"
+    iso = rf"(?<!\d){year}-0?{month}-0?{day}\b"
+    return any(re.search(pattern, text) for pattern in (written, numeric, iso))
 
 
 class DsbBrowser:
@@ -166,41 +206,29 @@ class DsbBrowser:
         if self._entry_week != week:
             self._open_entry_week(week)
         row = self._entry_row(slot)
-        value = row.locator("input").last.input_value()
+        value = self._hour_field(row).input_value()
         return value.replace(",", ".")
 
     def write_verified(self, slot: HourSlot) -> None:
+        if self._entry_week != IsoWeek(*slot.work_date.isocalendar()[:2]):
+            raise ValueError("DSB selected week changed. Prepare a new review before writing.")
         row = self._entry_row(slot)
-        self._select_allocation(row, slot.task.task_name)
-        field = row.get_by_role("spinbutton").first
+        field = self._hour_field(row)
         expect(field).to_be_editable()
         field.fill(slot.hours.replace(".", ","))
         field.press("Tab")
         for _ in range(HOUR_COMMIT_MILLISECONDS // HOUR_COMMIT_POLL_MILLISECONDS):
+            field = self._hour_field(self._entry_row(slot))
             if hour_value_matches(field.input_value(), slot.hours):
                 return
             self.page.wait_for_timeout(HOUR_COMMIT_POLL_MILLISECONDS)
         raise ValueError("DSB did not accept the requested hours. Rescan before retrying.")
 
-    def _select_allocation(self, row: Locator, allocation_name: str) -> None:
-        """Choose an allocation through the visible SAP combobox control in an entry row."""
-        combo = row.locator("input[role='combobox']").first
-        combo.click()
-        combo.fill(allocation_name)
-        candidates = [
-            *self.page.get_by_role("option", name=allocation_name, exact=True).all(),
-            *self.page.get_by_text(allocation_name, exact=True).all(),
-        ]
-        for candidate in candidates:
-            if candidate.is_visible():
-                candidate.click()
-                expect(combo).to_have_value(allocation_name)
-                return
-        combo.press("ArrowDown")
-        combo.press("Enter")
-        if combo.input_value() == allocation_name:
-            return
-        raise ValueError("DSB did not expose the selected allocation. Rescan before retrying.")
+    def _hour_field(self, row: Locator) -> Locator:
+        fields = row.get_by_role("spinbutton")
+        if fields.count() != 1:
+            raise ValueError("DSB hours field is ambiguous. Prepare a new review.")
+        return fields.first
 
     def commit_verified(self) -> None:
         """Send the reviewed batch; never approve/lock the DSB week."""
@@ -242,12 +270,49 @@ class DsbBrowser:
         return None
 
     def _entry_row(self, slot: HourSlot) -> Locator:
-        marker = self.page.locator(".sapMGHLITitle").filter(
-            has_text=re.compile(rf"\b{slot.work_date.day}\b.*{slot.work_date.year}")
-        )
-        row = marker.first.locator("xpath=following::tr[contains(@class, 'sapMListTblRow')][1]")
-        row.locator("input").last.wait_for()
-        return row
+        if allocation_id(slot.task.task_name) != slot.task.id:
+            raise ValueError(
+                "DSB allocation identity changed. Rescan allocations and review again."
+            )
+        groups = []
+        for group in self.page.locator("tr.sapMGHLI").all():
+            if not group.is_visible():
+                continue
+            titles = group.locator(".sapMGHLITitle")
+            if titles.count() == 1 and date_heading_matches(
+                titles.first.inner_text(), slot.work_date
+            ):
+                groups.append(group)
+        if not groups:
+            raise ValueError(
+                "DSB date row is missing. Select the week in DSB and prepare a new review."
+            )
+        if len(groups) != 1:
+            raise ValueError("DSB date row is duplicated. Prepare a new review before writing.")
+        matches: list[Locator] = []
+        for row in groups[0].locator("xpath=following-sibling::tr").all():
+            if row.locator(".sapMGHLITitle").count():
+                break
+            if (
+                not row.is_visible()
+                or "sapMListTblRow" not in (row.get_attribute("class") or "").split()
+            ):
+                continue
+            combos = row.locator("input[role='combobox']")
+            if combos.count() != 1:
+                raise ValueError("DSB allocation row is ambiguous. Prepare a new review.")
+            if combos.first.input_value().strip() == slot.task.task_name:
+                matches.append(row)
+        if not matches:
+            raise ValueError(
+                "DSB allocation row is missing for this date. Add it in DSB or select another "
+                "allocation, then prepare a new review. Existing rows were left unchanged."
+            )
+        if len(matches) != 1:
+            raise ValueError(
+                "DSB allocation row is duplicated. Prepare a new review before writing."
+            )
+        return matches[0]
 
 
 @contextmanager

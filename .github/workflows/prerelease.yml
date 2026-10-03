@@ -72,14 +72,20 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .venv
-          & .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+          & .\.venv\Scripts\python.exe -m pip install --no-deps -r requirements/windows-build.txt
           if ($LASTEXITCODE -ne 0) { throw "Project dependency installation failed." }
-          & .\.venv\Scripts\python.exe -m pip install pyinstaller
-          if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed." }
+          & .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation .
+          if ($LASTEXITCODE -ne 0) { throw "Project installation failed." }
+          & .\.venv\Scripts\python.exe -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Dependency consistency check failed." }
 
       - name: Run project quality gate
         shell: pwsh
         run: .\scripts\check.ps1
+
+      - name: Run core gate without desktop adapters
+        shell: pwsh
+        run: .\scripts\check-core.ps1
 
       - name: Build installer and updater package
         shell: pwsh

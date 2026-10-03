@@ -17,6 +17,8 @@ from qi_flow.application.ports import Clock, UnitOfWork
 from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 
+type _BackupSignature = tuple[tuple[Path, int, int, int, int], ...]
+
 
 class BackupManager:
     """Own daily backups, retention, validation, and guarded restoration."""
@@ -38,6 +40,7 @@ class BackupManager:
         self._default_folder = default_folder
         self._uow_factory = uow_factory
         self._clock = clock
+        self._catalog: tuple[Path, _BackupSignature, tuple[BackupView, ...]] | None = None
 
     def status(self) -> BackupStatusView:
         with self._uow_factory() as uow:
@@ -87,8 +90,21 @@ class BackupManager:
         return backup
 
     def list_backups(self, folder: Path | None = None) -> list[BackupView]:
-        target = folder or self.status_folder()
-        return self.valid_backups_in(target)
+        target = (folder or self.status_folder()).expanduser().resolve()
+        signature: list[tuple[Path, int, int, int, int]] = []
+        for path in sorted(target.glob(f"{self._BACKUP_PREFIX}*.sqlite3")):
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            signature.append((path, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino))
+        identity = tuple(signature)
+        catalog = self._catalog
+        if catalog is not None and catalog[:2] == (target, identity):
+            return list(catalog[2])
+        backups = tuple(self.valid_backups_in(target))
+        self._catalog = (target, identity, backups)
+        return list(backups)
 
     @classmethod
     def valid_backups_in(cls, target: Path) -> list[BackupView]:

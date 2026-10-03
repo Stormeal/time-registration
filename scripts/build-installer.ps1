@@ -1,21 +1,24 @@
 param(
     [switch]$InstallDependencies,
     [string]$Version = "",
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$PythonExecutable = ""
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$python = if ($PythonExecutable) { [System.IO.Path]::GetFullPath($PythonExecutable) } else {
+    Join-Path $projectRoot ".venv\Scripts\python.exe"
+}
 
 if (-not (Test-Path $python)) {
     throw "Create the project's virtual environment first: py -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e '.[dev]'"
 }
 
 if ($InstallDependencies) {
-    & $python -m pip install pyinstaller
+    & $python -m pip install --no-deps -r (Join-Path $projectRoot "requirements\windows-build.txt")
     if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller installation failed with exit code $LASTEXITCODE."
+        throw "Locked build dependency installation failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -34,7 +37,7 @@ if ($Version -and $Version -ne $projectVersion) {
 # ICU libraries can otherwise be copied into the app and prevent Qt from loading.
 $machinePathEntries = [Environment]::GetEnvironmentVariable("Path", "Machine") -split ";"
 $userPathEntries = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
-$buildPathEntries = @("$projectRoot\.venv\Scripts") + $machinePathEntries + $userPathEntries
+$buildPathEntries = @((Split-Path -Parent $python)) + $machinePathEntries + $userPathEntries
 $buildPathEntries = $buildPathEntries | Where-Object {
     $_ -and
     -not $_.ToLowerInvariant().Contains("\.cache\codex-runtimes\") -and

@@ -147,7 +147,7 @@ part of Task 19 before final lifecycle acceptance.
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |
 | 17 — Reminder identity | A15; US02, US14 | Complete; independent timers and stale-dialog guards pass 57 focused tests and the integrated gate. |
 | 18 — Unattended backups | A14; US15 | Automated acceptance and 645-test gate passed. |
-| 19 — Architecture / CI | Cross-cutting | Ports and all-worker lifecycle passed 662-test gate; reproducible CI and profiling in progress. |
+| 19 — Architecture / CI | Cross-cutting | Automated acceptance passed: 663 full tests, 311 independent core tests, clean locked environment and dependency checks. Final branch review remains. |
 | 20 — Windows and integration release gates | US21, US28–US32 | Pending. |
 
 ## Implementation rulings
@@ -206,3 +206,17 @@ tracking, and repeated close requests preserve the approved restart command.
 Clean-account installation/uninstallation, packaged updater success and rollback, two-client
 scratch-workbook concurrency and V1 cutover, and authorized live reviewed Testhuset/DSB fills
 remain open. Passing fixtures does not close these acceptance checks.
+
+The completed Task 19 gate passed **663 tests in 99.12 seconds**, 145 formatted Python files,
+Ruff clean and strict mypy clean for 76 source modules. A separately installed locked environment
+passed the same gate (**663 tests in 99.71 seconds**) and `pip check`. The independent core
+environment passed **311 tests in 21.61 seconds** with Qt, Playwright, Google, keyring and pytest-qt
+absent. CI runs both gates on Windows and pins the runtime, development and PyInstaller/build
+backend dependencies. The quality gate now checks maintained Python scripts and imports this
+checkout's source even when an editable installation points elsewhere.
+
+Profiling 10,000 sessions and 30 backup files found Today refresh at 27.70 ms with 24 SELECTs.
+Backup status/list refresh performed 60 integrity scans and took 2,042.86 ms. Derived file-validity
+caching with file/folder/day/replacement invalidation tests reduced repeated refresh to 10.03 ms.
+Restore and recovery retain independent integrity validation. See
+[the profile evidence](2026-10-04-runtime-profile.md).

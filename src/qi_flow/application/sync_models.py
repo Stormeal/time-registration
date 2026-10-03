@@ -108,6 +108,13 @@ def _mapping(value: object) -> Mapping[str, object]:
     return value
 
 
+def parse_json(raw: str) -> object:
+    """Parse without silently losing duplicate keys or accepting non-JSON numbers."""
+    value = json.loads(raw, object_pairs_hook=_object)
+    freeze_json(value)
+    return value
+
+
 @dataclass(frozen=True)
 class SyncTarget:
     spreadsheet_id: str
@@ -203,7 +210,7 @@ class SyncChange:
     @classmethod
     def from_json(cls, raw: str) -> SyncChange:
         try:
-            record = _mapping(json.loads(raw, object_pairs_hook=_object))
+            record = _mapping(parse_json(raw))
             expected = {
                 "change_id",
                 "schema_version",

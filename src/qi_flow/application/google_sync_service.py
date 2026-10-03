@@ -1,10 +1,21 @@
 """Conflict-safe synchronization of completed records through a gateway."""
 
-from collections.abc import Callable
+import hashlib
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
-from qi_flow.application.ports import UnitOfWork
+from qi_flow.application.ports import Clock, SyncGateway, UnitOfWork
+from qi_flow.application.sync_capture import active_target
+from qi_flow.application.sync_models import (
+    SyncChange,
+    SyncContentError,
+    SyncProblem,
+    SyncTarget,
+    canonical_json,
+    utc_instant,
+    validate_group,
+)
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -29,6 +40,143 @@ class GoogleSyncConflictError(ValueError):
 
 class GoogleSyncUpgradeRequiredError(ValueError):
     """Legacy snapshot synchronization is contained until reviewed V2 migration."""
+
+
+class SyncJobObsoleteError(ValueError):
+    """The destination or consent changed after this job was created."""
+
+
+class SyncJobCancelledError(ValueError):
+    """Cancellation left any uncertain publication durably pending."""
+
+
+class SyncPublicationService:
+    """Target-bound publication phase; reconciliation/migration own eligibility first."""
+
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        gateway: SyncGateway,
+        target: SyncTarget,
+        clock: Clock,
+        *,
+        generation: int,
+    ) -> None:
+        self._factory, self._gateway = uow_factory, gateway
+        self._target, self._clock, self._generation = target, clock, generation
+
+    def _ensure_binding(self, uow: UnitOfWork) -> None:
+        if (
+            uow.settings.get("google_sync_generation") != self._generation
+            or active_target(uow) != self._target
+        ):
+            raise SyncJobObsoleteError("Sync settings changed; start a new reviewed job.")
+
+    def _check_job(self, cancelled: Callable[[], bool], deadline: datetime) -> None:
+        if cancelled():
+            raise SyncJobCancelledError("Sync cancelled; unverified changes remain pending.")
+        if utc_instant(self._clock.now()) >= deadline:
+            raise TimeoutError("Sync deadline expired; unverified changes remain pending.")
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+
+    def _read(self) -> tuple[SyncChange, ...]:
+        try:
+            return self._gateway.read_changes()
+        except ValueError:
+            with self._factory() as uow:
+                self._ensure_binding(uow)
+                for problem in self._gateway.read_problems():
+                    uow.sync_for(self._target).record_problem(problem)
+            raise
+
+    def _stage(self, changes: Sequence[SyncChange]) -> bool:
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            repo = uow.sync_for(self._target)
+            repo.observe(changes)
+            for problem in self._gateway.read_problems():
+                repo.record_problem(problem)
+            groups: dict[str, list[SyncChange]] = {}
+            for change in repo.observed():
+                groups.setdefault(change.group_id, []).append(change)
+            incomplete = []
+            for group_id, group in groups.items():
+                first = group[0]
+                actual = {change.change_id for change in group}
+                if actual < set(first.group_members) and all(
+                    change.group_members == first.group_members
+                    and change.group_digest == first.group_digest
+                    and change.aggregate_base_heads == first.aggregate_base_heads
+                    for change in group
+                ):
+                    incomplete.append(group_id)
+                    continue
+                try:
+                    validate_group(group)
+                except ValueError:
+                    raw = [change.to_record() for change in group]
+                    identifier = hashlib.sha256(canonical_json(raw).encode("utf-8")).hexdigest()
+                    repo.record_problem(
+                        SyncProblem(identifier, "invalid_group", raw, "group:" + group_id)
+                    )
+            repo.set_state("incomplete_groups", incomplete)
+            return bool(repo.problems()) or bool(incomplete)
+
+    @staticmethod
+    def _groups(changes: Sequence[SyncChange]) -> tuple[tuple[SyncChange, ...], ...]:
+        groups: dict[str, list[SyncChange]] = {}
+        for change in changes:
+            groups.setdefault(change.group_id, []).append(change)
+        result = tuple(tuple(group) for group in groups.values())
+        for group in result:
+            validate_group(group)
+        return result
+
+    def publish_once(self, *, cancelled: Callable[[], bool], deadline: datetime) -> int:
+        """Verify exact IDs; never equate a failed response with a failed append."""
+        deadline = utc_instant(deadline)
+        self._check_job(cancelled, deadline)
+        remote = self._read()
+        if self._stage(remote):
+            raise SyncContentError("Unresolved sync data is staged; publication is paused.")
+        self._check_job(cancelled, deadline)
+        remote_by_id = {change.change_id: change for change in remote}
+        outgoing: list[SyncChange] = []
+        already_present: list[str] = []
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            repo = uow.sync_for(self._target)
+            if repo.conflicts():
+                raise SyncContentError("Resolve sync conflicts before publishing changes.")
+            for group in self._groups(repo.pending()):
+                if all(remote_by_id.get(change.change_id) == change for change in group):
+                    already_present.extend(change.change_id for change in group)
+                elif all(
+                    not_before is None or not_before <= self._clock.now()
+                    for not_before in (
+                        repo.publication(change.change_id).not_before for change in group
+                    )
+                ):
+                    outgoing.extend(group)
+            repo.acknowledge(already_present)
+            repo.mark_attempted(tuple(change.change_id for change in outgoing))
+        if not outgoing:
+            return len(already_present)
+        self._check_job(cancelled, deadline)
+        self._gateway.append_changes(outgoing)
+        # Readback uses this job's immutable target, including if settings changed meanwhile.
+        verified = self._read()
+        self._check_job(cancelled, deadline)
+        if self._stage(verified):
+            raise SyncContentError("Readback contains quarantined data; changes remain pending.")
+        verified_by_id = {change.change_id: change for change in verified}
+        if not all(verified_by_id.get(change.change_id) == change for change in outgoing):
+            raise SyncContentError("Append could not be verified; retry with the original IDs.")
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            uow.sync_for(self._target).acknowledge(tuple(change.change_id for change in outgoing))
+        return len(already_present) + len(outgoing)
 
 
 def _stamp(value: datetime | None) -> str | None:

@@ -2,7 +2,7 @@
 
 The audit remediation replaces snapshot replacement with an immutable change log. The current
 implementation stores protocol state and captures eligible local commands atomically; ordinary V2
-publication remains disabled until transport, reconciliation, and reviewed initialization or
+publication remains disabled until reconciliation and reviewed initialization or
 migration are implemented and verified.
 The public V1 sync operation refuses before reading the Sheet or importing records and explains
 that a reviewed upgrade is required. Local tracking remains available.
@@ -42,12 +42,23 @@ is persisted before network work and survives timeouts and restart. Undo remains
 every captured completion gets a durable withdrawal, including one not yet attempted. A subsequent completion
 descends from that withdrawal. Retries retain original IDs and destinations.
 
-Publication will append complete groups as canonical JSON `stringValue` cells to dedicated
-`QI_FLOW_SYNC_V2`; it will never clear a shared tab, reserve rows from a client-side read, or
+The transport appends complete groups as canonical JSON `stringValue` cells to dedicated
+`QI_FLOW_SYNC_V2`; it never clears a shared tab, reserve rows from a client-side read, or
 interpret payloads as formulas. Exact readback verifies content before acknowledging the specific
-pending IDs. Network work runs outside SQLite transactions. Configuration changes and explicit disable advance a local generation and stop capture. Jobs
-will bind this generation to prevent obsolete publication or application to a new target. Reviewed
+pending IDs. Network work runs outside SQLite transactions. Configuration changes and explicit disable advance a local generation and stop capture. The publication phase binds this generation to prevent obsolete publication or application to a new target. Reviewed
 migration must establish baseline heads before setting `migration_complete` and enabling capture.
+
+The adapter checks a dedicated V2 manifest before every append and preserves unsupported or
+changed manifests as target-bound problems. Incomplete groups remain staged without permanently
+quarantining a group that may complete on a later read. Exact verified retries acknowledge existing
+records without another append. Concurrent local edits are excluded from the older job's exact
+acknowledgement set. Snapshot replacement also refuses directly at the adapter boundary.
+
+The append protocol is an engineering inference from [Google's append request](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/request#appendcellsrequest)
+and [batch update guarantees](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate).
+Synthetic fixtures verify behavior; the actual two-client scratch-workbook acceptance check remains
+required before release. Publication transport alone does not validate or materialize domain data;
+causal reconciliation is the next implementation gate.
 
 ## Migration and release prerequisites
 

@@ -49,6 +49,19 @@ Task 7a does not complete Task 7 or enable ordinary V2 sync. Local mutation capt
 append transport, causal reconciliation, and reviewed migration remain required.
 After the agents reached the account limit, execution continued inline in the existing worktree.
 
+## Sync capture and transport verified
+
+The capture slice at `1964347` passed the 505-test quality gate. It records completed aggregates,
+metadata, assignment, deletion and restoration with their outbox and causal heads atomically.
+Finish uses durable publication grace; Undo records a withdrawal rather than deleting ancestry.
+
+The subsequent append/readback implementation passed `scripts/check.ps1`: **525 tests in
+83.55 seconds**, 110 formatted Python files, Ruff clean, strict mypy clean for 61 source modules.
+Synthetic shared-Sheet fixtures cover both client orders, lost responses, stable retries, concurrent
+local edits, stale configuration, raw quarantine, incomplete groups, cancellation and quota refusal.
+This verifies protocol storage and transport; causal materialization and reviewed migration remain
+open, so ordinary V2 sync is still disabled.
+
 ## Task status
 
 | Plan task | Audit / stories | Status |
@@ -59,7 +72,7 @@ After the agents reached the account limit, execution continued inline in the ex
 | 4 — Updater ownership | A07; US32 | Complete; 23 focused tests, review and integrated gate pass; packaged release check remains open. |
 | 5 — Exact DSB row | A09; US30 | Complete; 29 focused tests, review and integrated gate pass; live DSB check remains open. |
 | 6 — Explicit row choices | A18; US45 | Complete code; 93 focused tests, review and integrated gate pass; destination release checks remain open. |
-| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Task 7a foundation verified; Task 7b capture underway. Ordinary V2 publication remains disabled until protocol and migration pass; public V1 sync visibly refuses unsafe snapshot writes. |
+| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Tasks 7a/7b local persistence/capture and Task 8 transport are verified. Task 9 causal reconciliation is next. Ordinary V2 publication remains disabled until reconciliation and reviewed migration pass; V1 sync visibly refuses snapshot writes. |
 | 14 — DSB allowlist | US31 | Pending. |
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |

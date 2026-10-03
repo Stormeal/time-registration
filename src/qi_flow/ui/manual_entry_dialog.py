@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QMessageBox,
-    QStackedWidget,
     QTimeEdit,
 )
 
@@ -57,14 +56,13 @@ class ManualEntryDialog(QDialog):
         )
         layout = QFormLayout(self)
         layout.addRow("Type", self._kind)
-        self._work_session = QStackedWidget()
-        self._work_session.addWidget(self._date)
-        self._work_session.addWidget(self._parent)
-        layout.addRow("Work session", self._work_session)
+        layout.addRow("Date", self._date)
+        layout.addRow("Work session", self._parent)
         layout.addRow("Start", self._start)
         layout.addRow("End", self._end)
         layout.addRow(self._buttons)
         self._kind.currentIndexChanged.connect(self._update_parent_visibility)
+        self._parent.currentIndexChanged.connect(self._update_parent_date)
         self._buttons.accepted.connect(self._save)
         self._buttons.rejected.connect(self.reject)
         self._load_sessions(initial)
@@ -98,9 +96,20 @@ class ManualEntryDialog(QDialog):
             self._parent.addItem(label, str(active.id))
 
     def _update_parent_visibility(self) -> None:
-        self._work_session.setCurrentWidget(
-            self._date if self._kind.currentData() == "work" else self._parent
-        )
+        is_deduction = self._kind.currentData() != "work"
+        self._parent.setVisible(is_deduction)
+        self._date.setEnabled(not is_deduction)
+        if is_deduction:
+            self._update_parent_date()
+
+    def _update_parent_date(self) -> None:
+        if self._kind.currentData() == "work":
+            return
+        for session in self._service.completed_sessions():
+            if str(session.id) == self._parent.currentData():
+                local_date = session.actual_started_at.astimezone(COPENHAGEN).date()
+                self._date.setDate(QDate(local_date.year, local_date.month, local_date.day))
+                break
 
     def _save(self) -> None:
         start = self._as_copenhagen(self._date.date(), self._start.time())

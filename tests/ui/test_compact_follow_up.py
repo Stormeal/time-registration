@@ -348,3 +348,37 @@ def test_untouched_editor_with_seconds_closes_without_discard_prompt(qtbot, rig,
     dialog._start.setTime(dialog._start.time().addSecs(60))
     dialog.reject()
     assert len(prompts) == 1
+
+
+def test_manual_deduction_uses_visible_selected_parent_date(qtbot, rig, monkeypatch):
+    from datetime import UTC, date, datetime
+
+    from PySide6.QtCore import QDate, QTime
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    from qi_flow.application.dto import ManualWorkSessionCommand
+    from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
+
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Discard)
+    rig.clock.value = datetime(2026, 10, 3, 12, tzinfo=UTC)
+    session = rig.service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 10, 1, 7, tzinfo=UTC), datetime(2026, 10, 1, 14, tzinfo=UTC)
+        )
+    )
+    dialog = ManualEntryDialog(rig.service, date(2026, 10, 2))
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog._kind.setCurrentIndex(dialog._kind.findData(DeductionKind.LUNCH.value))
+    dialog._parent.setCurrentIndex(dialog._parent.findData(str(session.id)))
+    dialog._start.setTime(QTime(12, 0))
+    dialog._end.setTime(QTime(12, 30))
+
+    assert dialog._date.isVisible()
+    assert dialog._date.date() == QDate(2026, 10, 1)
+    dialog._buttons.button(QDialogButtonBox.StandardButton.Save).click()
+    deduction = rig.service.completed_deductions(session.id)[0]
+    assert deduction.actual_started_at == datetime(2026, 10, 1, 10, tzinfo=UTC)
+    assert deduction.actual_ended_at == datetime(2026, 10, 1, 10, 30, tzinfo=UTC)
+

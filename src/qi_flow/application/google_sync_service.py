@@ -2,20 +2,25 @@
 
 import hashlib
 from collections.abc import Callable, Sequence
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
-from qi_flow.application.ports import Clock, SyncGateway, UnitOfWork
+from qi_flow.application.ports import Clock, IdentifierGenerator, SyncGateway, UnitOfWork
 from qi_flow.application.sync_capture import active_target
 from qi_flow.application.sync_models import (
     SyncChange,
     SyncContentError,
+    SyncJobCancelledError,
+    SyncJobObsoleteError,
     SyncProblem,
     SyncTarget,
     canonical_json,
     utc_instant,
     validate_group,
 )
+from qi_flow.application.sync_reconciliation import SyncReconciler
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -40,14 +45,6 @@ class GoogleSyncConflictError(ValueError):
 
 class GoogleSyncUpgradeRequiredError(ValueError):
     """Legacy snapshot synchronization is contained until reviewed V2 migration."""
-
-
-class SyncJobObsoleteError(ValueError):
-    """The destination or consent changed after this job was created."""
-
-
-class SyncJobCancelledError(ValueError):
-    """Cancellation left any uncertain publication durably pending."""
 
 
 class SyncPublicationService:
@@ -177,6 +174,65 @@ class SyncPublicationService:
             self._ensure_binding(uow)
             uow.sync_for(self._target).acknowledge(tuple(change.change_id for change in outgoing))
         return len(already_present) + len(outgoing)
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    pending_count: int
+    conflict_count: int
+    last_success: datetime | None
+    state: str
+
+
+class SyncService(SyncPublicationService):
+    """Reconcile every pull before publishing or confirming a successful job."""
+
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        gateway: SyncGateway,
+        target: SyncTarget,
+        clock: Clock,
+        identifiers: IdentifierGenerator,
+        *,
+        generation: int,
+    ) -> None:
+        super().__init__(uow_factory, gateway, target, clock, generation=generation)
+        self._reconciler = SyncReconciler(
+            uow_factory, target, clock, identifiers, generation=generation
+        )
+
+    def _stage(self, changes: Sequence[SyncChange]) -> bool:
+        protocol_blocked = super()._stage(changes)
+        result = self._reconciler.reconcile()
+        return protocol_blocked or result.conflict_count > 0 or result.staged_count > 0
+
+    def run_once(self, *, cancelled: Callable[[], bool], deadline: datetime) -> SyncResult:
+        # Reconciliation evidence stays durable; status contains no private payloads.
+        with suppress(SyncContentError):
+            self.publish_once(cancelled=cancelled, deadline=deadline)
+        self._check_job(cancelled, utc_instant(deadline))
+        with self._factory() as uow:
+            self._ensure_binding(uow)
+            repo = uow.sync_for(self._target)
+            pending, conflicts = len(repo.pending()), len(repo.conflicts())
+            staged = bool(repo.get_state("staged_reconciliation"))
+            invalid = bool(repo.problems())
+            state = (
+                "invalid_data"
+                if invalid
+                else "conflict"
+                if conflicts
+                else "pending"
+                if pending or staged
+                else "synced"
+            )
+            saved = repo.get_state("last_success")
+            last_success = datetime.fromisoformat(saved) if isinstance(saved, str) else None
+            if state == "synced":
+                last_success = utc_instant(self._clock.now())
+                repo.set_state("last_success", last_success.isoformat())
+            return SyncResult(pending, conflicts, last_success, state)
 
 
 def _stamp(value: datetime | None) -> str | None:

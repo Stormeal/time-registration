@@ -363,3 +363,11 @@ class SyncContentError(ValueError):
 
 class SyncReviewError(ValueError):
     """Conflict heads changed after the user reviewed them."""
+
+
+class SyncJobObsoleteError(ValueError):
+    """The destination or consent changed after this job was created."""
+
+
+class SyncJobCancelledError(ValueError):
+    """Cancellation left any uncertain publication durably pending."""

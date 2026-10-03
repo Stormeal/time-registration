@@ -198,14 +198,14 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Files:** Modify `src/qi_flow/application/google_sync_service.py`; create `src/qi_flow/application/sync_reconciliation.py`, `tests/integration/test_sync_reconciliation.py`; extend `tests/unit/test_google_sync_service.py`.
 
-- [ ] Add unequal-revision independent edits and equal-revision differing day details; assert both variants survive as conflicts. Identify old payloads by explicit version/kind, never absence of `source`.
-- [ ] Import different IDs for the same one-hour span. Assert the second invalid group is staged for reconciliation and the timesheet remains 3,600 net seconds, not 7,200. Cover missing parent, active parent, open imports, overlapping deductions, invalid boundaries, future timestamps, and incomplete groups.
-- [ ] Test delete-versus-edit, long-offline reconnect after 30-day audit expiry, restored backup with obsolete heads/pending rows, and copied device metadata. Assert remote tombstones are preserved; restored divergence cannot silently resurrect deleted data.
-- [ ] Test a valid unrelated group alongside an invalid group, truncated groups, missing/out-of-order ancestors, and concurrent parent-session versus deduction edits: durable observations/conflicts survive restart and no invalid aggregate is partially materialized.
-- [ ] Pull the same changes repeatedly and assert zero new outbox records. Remote materialization preserves origin; only local commands and explicit resolutions author new changes. Include restored state bound to a different sheet/log.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_sync_service.py tests/integration/test_sync_reconciliation.py -q`.
-- [ ] Build candidate heads by ancestry, stage missing/invalid input, and materialize complete valid aggregates using Task 2 validation and short SQLite transactions. Keep all competing changes and tombstones beyond audit expiry. Backup restore enters reconciliation before any new shared publication.
-- [ ] Re-run and gate under US29, including preservation of stable IDs and assignment/day-detail coverage.
+- [x] Add unequal-revision independent edits and equal-revision differing day details; assert both variants survive as conflicts. Identify old payloads by explicit version/kind, never absence of `source`.
+- [x] Import different IDs for the same one-hour span. Assert the second invalid group is staged for reconciliation and the timesheet remains 3,600 net seconds, not 7,200. Cover missing parent, active parent, open imports, overlapping deductions, invalid boundaries, future timestamps, and incomplete groups.
+- [x] Test delete-versus-edit, long-offline reconnect after 30-day audit expiry, restored backup with obsolete heads/pending rows, and copied device metadata. Assert remote tombstones are preserved; restored divergence cannot silently resurrect deleted data.
+- [x] Test a valid unrelated group alongside an invalid group, truncated groups, missing/out-of-order ancestors, and concurrent parent-session versus deduction edits: durable observations/conflicts survive restart and no invalid aggregate is partially materialized.
+- [x] Pull the same changes repeatedly and assert zero new outbox records. Remote materialization preserves origin; only local commands and explicit resolutions author new changes. Include restored state bound to a different sheet/log.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_sync_service.py tests/integration/test_sync_reconciliation.py -q`.
+- [x] Build candidate heads by ancestry, stage missing/invalid input, and materialize complete valid aggregates using Task 2 validation and short SQLite transactions. Keep all competing changes and tombstones beyond audit expiry. Backup restore enters reconciliation before any new shared publication.
+- [x] Re-run and gate under US29, including preservation of stable IDs and assignment/day-detail coverage.
 
 ### Task 10: Migrate all participating legacy histories deliberately — proposed US46
 

@@ -2,7 +2,7 @@
 
 The audit remediation replaces snapshot replacement with an immutable change log. The current
 implementation stores protocol state and captures eligible local commands atomically; ordinary V2
-publication remains disabled until reconciliation and reviewed initialization or
+publication remains disabled until reviewed initialization or
 migration are implemented and verified.
 The public V1 sync operation refuses before reading the Sheet or importing records and explains
 that a reviewed upgrade is required. Local tracking remains available.
@@ -58,7 +58,31 @@ The append protocol is an engineering inference from [Google's append request](h
 and [batch update guarantees](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate).
 Synthetic fixtures verify behavior; the actual two-client scratch-workbook acceptance check remains
 required before release. Publication transport alone does not validate or materialize domain data;
-causal reconciliation is the next implementation gate.
+causal reconciliation now validates complete candidate aggregates before writes. Production
+activation remains gated on reviewed migration and runtime wiring.
+
+## Causal materialization
+
+The graph uses explicit parent IDs and aggregate bases, rather than numeric revisions, timestamps,
+or device identity. Incomplete groups and missing/mismatched/cyclic ancestry remain durable staged
+state. Independent heads and concurrent parent/deduction edits become durable conflicts. A conflict
+retains stable identity across repeated pulls and updates its competing heads when new data arrives.
+Quarantined duplicate IDs also invalidate descendants that would otherwise claim proven ancestry.
+
+V2 payloads require explicit known fields, aware completed intervals, valid enums and integers, and
+nonnull creation/update metadata. Missing fields do not imply a legacy format. A known V1 format
+must instead be transformed deliberately during migration. Upserts cannot carry implicit deletion.
+Day IDs are canonical ISO dates, including tombstones.
+
+Candidate work/deduction aggregates use the shared domain validator before any adapter write.
+Invalid groups cannot partially materialize; valid unrelated components may still import. Parents
+are written before children. Remote writes never create outbox echoes or replace local running
+timers. Soft-deleted/withdrawn work retains immutable protocol provenance. A restored pending edit
+is reconciled against remote history before publication, preventing silent resurrection.
+
+The composed service records confirmed success only when no pending changes, conflicts, staging,
+or raw problems remain. Its callbacks recheck target/generation ownership. It is not yet wired to
+production Settings; guided migration and conflict choices remain required.
 
 ## Migration and release prerequisites
 

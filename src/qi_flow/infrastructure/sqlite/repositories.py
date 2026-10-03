@@ -234,6 +234,11 @@ class SQLiteDayDetailsRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def delete(self, work_date: date) -> None:
+        self._connection.execute(
+            "DELETE FROM day_details WHERE work_date=?", (work_date.isoformat(),)
+        )
+
     def get(self, work_date: date) -> DayDetails | None:
         row = self._connection.execute(
             "SELECT * FROM day_details WHERE work_date=?", (work_date.isoformat(),)

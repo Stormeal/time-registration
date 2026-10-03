@@ -1,6 +1,6 @@
 # Work time tracker — requirements
 
-Version: 0.5 · Updated: 2026-09-17 · Status: iteration 1 approved; user stories drafted
+Version: 0.6 · Updated: 2026-10-04 · Status: approved scope; audit implementation verified, release acceptance open
 
 ## Goal and context
 
@@ -13,7 +13,8 @@ A fast personal Windows desktop application for recording work across multiple m
 3. Only after approval, write user stories together.
 4. Begin development after the user-story step and user direction.
 
-No application implementation, account connection, or workplace submission has been performed. This document captures requirements, not completed features. Stable IDs should be retained across sessions.
+This document records approved scope. Current implementation status and outstanding real-environment
+acceptance are tracked below and in `USER_STORIES.md`; stable requirement IDs are retained.
 
 Detailed product decisions are recorded in `DECISIONS.md`. Implementable iteration 1 behavior and acceptance criteria are recorded in `USER_STORIES.md`.
 
@@ -21,34 +22,34 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 
 | ID | Requirement | Implementation status |
 | --- | --- | --- |
-| R01 | Installed Windows desktop application; everyday use outside a browser. Fast and small in feel. | Not started |
-| R02 | Start work records the current start time; Finish records the end time. This is the primary input method. | Not started |
-| R03 | Manually add and correct time when tracking was forgotten. | Not started |
-| R04 | Support multiple work intervals per day, including evening work; sum them into daily hours. | Not started |
-| R05 | **Start lunch** begins a separate lunch interval that continues until **End lunch** is pressed. The surrounding work session remains continuous, while completed lunch time is deducted from net worked hours. | Not started |
-| R06 | View logged hours for every day of each month within the application. | Not started |
-| R07 | Share one synchronized timesheet across the work laptop and personal desktop. | Not started |
-| R08 | Use a private Google Sheet as shared storage; synchronize at application opening and closing. | Not started |
-| R09 | Provide button-driven weekly registration to Testhuset at https://testhuset.eazyproject.net/dashboard.aspx. | Not started |
-| R10 | Provide button-driven weekly registration to DSB through the installed SAP Logon application. | In progress |
-| R11 | Python is the preferred language following discussion. | Not started |
+| R01 | Installed Windows desktop application; everyday use outside a browser. Fast and small in feel. | Complete |
+| R02 | Start work records the current start time; Finish records the end time. This is the primary input method. | Complete |
+| R03 | Manually add and correct time when tracking was forgotten. | Complete |
+| R04 | Support multiple work intervals per day, including evening work; sum them into daily hours. | Complete |
+| R05 | **Start lunch** begins a separate lunch interval that continues until **End lunch** is pressed. The surrounding work session remains continuous, while completed lunch time is deducted from net worked hours. | Complete |
+| R06 | View logged hours for every day of each month within the application. | Complete |
+| R07 | Share one synchronized timesheet across the work laptop and personal desktop. | In progress |
+| R08 | Use a private Google Sheet as shared storage; synchronize on opening, eligible completed changes and periodically. Closing cancels bounded work and preserves pending changes for the next opening. | In progress |
+| R09 | Provide button-driven weekly registration to Testhuset at https://testhuset.eazyproject.net/dashboard.aspx. | In progress |
+| R10 | Provide reviewed button-driven weekly registration through the DSB browser timesheet and its Send action. SAP automation remains deferred. | In progress |
+| R11 | Python is the preferred language following discussion. | Complete |
 | R12 | Persist requirements and design for review across sessions; approval precedes user stories and development. | Complete |
-| R13 | Use the existing timesheet workbook for synchronized storage while preserving its current monthly sheets, formulas, and formatting. | Not started |
-| R14 | Workplace registrations remain drafts unless the user explicitly presses **Submit week**; synchronization alone never performs a final submission. | Not started |
-| R15 | When workplace authentication is required, prompt the user to log in before automation navigates and fills the registration workflow. | Not started |
-| R16 | The first iteration operates locally on one Windows machine and does not include Google Sheets synchronization. Cross-machine synchronization remains a later requirement. | Not started |
-| R17 | Closing the main window minimizes Worktime to the system tray without ending an active work or lunch interval. Exiting the application requires right-clicking the tray icon and choosing **Close app**. | Not started |
-| R18 | While lunch is active, only **End lunch** ends the lunch interval. **Finish work** is unavailable until lunch has ended. | Not started |
-| R19 | The monthly timesheet is a list grouped by calendar week number. | Not started |
+| R13 | Use the existing timesheet workbook for synchronized storage while preserving its current monthly sheets, formulas, and formatting. | In progress |
+| R14 | Workplace writes require explicit reviewed confirmation; Testhuset closure and DSB approval/locking remain manual. Google synchronization never submits workplace registrations. | In progress |
+| R15 | When workplace authentication is required, prompt the user to log in before automation navigates and fills the registration workflow. | Complete |
+| R16 | The first iteration operates locally on one Windows machine and does not include Google Sheets synchronization. Cross-machine synchronization remains a later requirement. | Complete |
+| R17 | With a system tray, window close minimizes QI Flow without ending tracking. Close app and, without a tray, window close use shared confirmation; failed Finish or cancellation keeps the application accessible. | Complete |
+| R18 | While lunch is active, only **End lunch** ends the lunch interval. **Finish work** is unavailable until lunch has ended. | Complete |
+| R19 | The monthly timesheet is a list grouped by calendar week number. | Complete |
 | R20 | Button actions use configurable 1, 5, 10, or 15-minute rounding, defaulting to 5 minutes. Timer-created work starts use the previous boundary only when it is nearer than the next boundary; otherwise the actual start is kept. Work finishes round up; completed lunch boundaries use nearest rounding. Live timers use actual time, completed entries use effective times, and manual entries accept exact minutes. | Complete |
 | R21 | Detect unfinished previous-day sessions and long Windows sleep intervals, requiring the user to resolve ambiguous time before further timer actions. | Complete |
 | R22 | Support multiple lunch intervals and deducted sleep-break intervals within one continuous work session. | Complete |
 | R23 | Offer a 30-second undo for timer actions and retain deleted or changed entry history for 30 days. | Complete |
-| R24 | Support optional Windows startup, single-instance behavior, a compact tray panel, and recovery-focused startup behavior. | Not started |
-| R25 | Provide configurable work and lunch reminders, defaulting to 9 elapsed hours and 45 lunch minutes, with user-selected snooze. | Not started |
-| R26 | Create daily SQLite backups, retain 30, support a selectable backup folder and guided restoration, and never replace an unreadable database silently. | In progress |
-| R27 | Use a 37-hour default weekly target with per-week overrides and neutral remaining/over-target feedback. | Not started |
-| R28 | Use English UI text with Danish formats, ISO Monday–Sunday weeks, Europe/Copenhagen time, and correct daylight-saving elapsed-time calculations. | Not started |
+| R24 | Support optional Windows startup, single-instance behavior, a compact tray panel, and recovery-focused startup behavior. | Complete |
+| R25 | Provide configurable work and lunch reminders, defaulting to 9 elapsed hours and 45 lunch minutes, with user-selected snooze. | Complete |
+| R26 | Create daily SQLite backups, retain 30, support a selectable backup folder and guided restoration, and never replace an unreadable database silently. | Complete |
+| R27 | Use a 37-hour default weekly target with per-week overrides and neutral remaining/over-target feedback. | Complete |
+| R28 | Use English UI text with Danish formats, ISO Monday–Sunday weeks, Europe/Copenhagen time, and correct daylight-saving elapsed-time calculations. | Complete |
 | R29 | Export summary and detailed UTF-8 semicolon-separated CSV for a week, month, or all history, using Danish decimal commas. | Complete |
 | R30 | Install and update per Windows user without administrator rights. QI Flow may check for and install verified releases without requiring the user to manually download and run the installer for each update. Updates must preserve user data and support recovery if an update fails. Retain data indefinitely, keep limited privacy-safe local diagnostics, and include no telemetry. | In progress |
 | R31 | Allow completed work sessions and lunch/break deductions to be corrected from Timesheet using exact manual times, while preserving validation and 30-day recovery history. | Complete |
@@ -59,7 +60,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R36 | Let each user choose a default Testhuset task and apply per-session overrides from the latest scanned task list. | Complete |
 | R37 | Preview and explicitly confirm Testhuset weekly timesheet fills, write two-decimal period-separated hours, resolve differing existing values per slot, verify saves, and leave week closure manual. | Complete |
 | R38 | Show each Timesheet day’s rounded net duration as period-separated decimal hours for Testhuset review. | Complete |
-| R39 | Let the user choose which scanned Testhuset project/task branches count toward DSB registration. DSB preview and fill exclude sessions assigned to all other branches while preserving them in QI Flow and Testhuset totals. | Not started |
+| R39 | Let the user choose which scanned Testhuset project/task branches count toward DSB registration. DSB preview and fill exclude sessions assigned to all other branches while preserving them in QI Flow and Testhuset totals. | In progress |
 
 ### Example calculation
 
@@ -101,10 +102,10 @@ September 3, 2026: 08:00–15:30 plus 19:45–20:45 = 8h 30m = 8.5 decimal hours
 
 ## Integration feasibility and limitations
 
-- Google Sheets is selected as shared storage, but concurrent writes require deliberate reconciliation. A reliable conflict protocol has not been designed or proven. Opening/closing sync alone cannot ensure another running machine has fresh data.
-- Google Sheets and cross-machine behavior are explicitly deferred beyond iteration 1.
-- Testhuset: Playwright is a proposed browser automation approach. The app should prompt for login and then automate navigation. Whether login can safely be automated or should be completed by the user in the destination window will be decided after inspecting authentication, SSO and MFA. The registration form, project fields, draft/final actions and confirmation signals have not been inspected.
-- DSB: investigate SAP GUI Scripting availability on the work machine and server. SAP Logon is not a Playwright browser target. The app should prompt for login before navigation; the user may need to enter credentials directly in SAP Logon. Transaction, scripting availability, network access, draft/final actions and confirmation behavior remain unknown.
+- Optional Google Sheets V2 sync uses immutable causal records, atomic local capture, verified readback and explicit conflict resolution. Existing V1 data requires verified all-participant migration; real two-client workbook acceptance remains open.
+- Later decisions authorize Google, Testhuset and DSB integrations beyond the original local-only iteration. Existing workbook tabs and formulas remain outside QI Flow's owned structured tabs.
+- Testhuset and DSB use temporary Edge sessions with user-managed login, explicit differing-row choices and verified destination saves. DSB includes only selected scanned Testhuset branches and uses Send without approval or locking. Local browser fixtures pass; live reviewed-fill acceptance remains open.
+- SAP GUI scripting remains deferred. No SAP connector, telemetry or automatic update installation is introduced by the audit remediation.
 - The desktop tracker can operate independently of workplace connectivity; submissions must run on a machine with access to the destination.
 - A browser can still be needed for Google authorization and Testhuset submission even though the tracker is a desktop application.
 
@@ -113,7 +114,7 @@ September 3, 2026: 08:00–15:30 plus 19:45–20:45 = 8h 30m = 8.5 decimal hours
 | ID | Question | Suggested starting point |
 | --- | --- | --- |
 | Q01 | Existing Google workbook or a separate private workbook? | **Resolved:** use the existing workbook and add structured app-data tabs without changing existing month tabs. |
-| Q02 | Does closing the window minimize to tray? What does explicit Quit do to a running session? | **Resolved:** closing minimizes to tray without changing the active session. The application exits only through **Close app** in the tray context menu. Active timestamps are persisted before exit. |
+| Q02 | Does closing the window minimize to tray? What does explicit Quit do to a running session? | **Resolved:** closing minimizes to tray without changing the active session. With a tray, use **Close app**; without a tray, window close and the visible action use the same confirmation. Failed Finish and Cancel keep the window accessible. Active timestamps are persisted before exit. |
 | Q03 | How should Finish work behave while on lunch? | **Resolved:** lunch is a separate interval inside one continuous work session and only **End lunch** stops it. **Finish work** is unavailable during lunch. |
 | Q04 | What happens for forgotten timers, overlapping entries, midnight and conflicting offline edits? | Offer explicit correction; no automatic idle-time deductions. Define reconciliation before sync implementation. |
 | Q05 | Do workplaces require rounding, activity/project codes, comments, or different hour totals? | Preserve raw time; configure each destination after inspecting workflows. |

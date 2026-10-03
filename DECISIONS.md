@@ -10,7 +10,7 @@ This file records the shared understanding reached during the design interview. 
 | --- | --- |
 | D001 | The application is named **QI Flow**. |
 | D002 | Iteration 1 is a local Windows application built with Python, PySide6, and SQLite. |
-| D003 | Google Sheets synchronization, cross-machine behavior, Testhuset, SAP, authentication, and workplace submission are deferred. |
+| D003 | These integrations were deferred during the original local-only iteration. Later decisions authorize optional Google Sheets, Testhuset and DSB browser integration; SAP remains deferred. |
 | D004 | The application installs for the current Windows user without requiring administrator rights. Uninstall removes the optional Start with Windows entry only when it still points to that installation; user data remains. |
 | D005 | QI Flow has no telemetry. Verified application updates may be checked and applied from within QI Flow without requiring the user to manually download and run the installer for each release. Updates must preserve user data and the installed Windows uninstaller, require no administrator rights, and provide a safe recovery path if application-file replacement fails. The installer remains available for first installation and recovery. |
 
@@ -119,6 +119,23 @@ This file records the shared understanding reached during the design interview. 
 | D081 | Verification covers crash recovery, Windows shutdown, unfinished previous-day recovery, sleep resolution, backup/restore, invalid intervals, and database migration/recovery behavior. |
 
 ## Change log
+
+- 2026-10-04: Approved audit implementation uses an immutable causal V2 sync log and atomic local
+  outbox. V1 snapshot writes refuse publication; verified migration requires every declared
+  participant, preserves V1 and local safety copies, and exposes divergent histories. Completed
+  records publish after Undo grace; active aggregates remain local. Explicit conflict commands
+  validate the complete candidate. Closing starts no new sync job: bounded requests cannot meet
+  the five-second best-effort close budget, so current work is cancelled/joined and durable pending
+  changes retry on opening. A changed acknowledged migration history requires a fresh reviewed
+  migration into a new private Sheet; in-place acknowledgement supersession is unsupported.
+- 2026-10-04: Exit, restore and update restart use one owned-worker shutdown barrier. Restore
+  replaces SQLite while process ownership is held; bootstrap launches a replacement only after
+  all workers join and the lock is released. Failed restore resumes tracking. Daily backups run
+  off the UI thread with captured Copenhagen date/destination, atomic staging and failure retries.
+  Cached backup catalogs contain only derived file validity and are not trusted for restoration.
+- 2026-10-04: Architecture and CI checks cover nested dependency boundaries, pinned Windows build
+  dependencies and an independent core test environment without Qt or external integration
+  packages. These automated gates do not replace clean-account or live integration acceptance.
 
 - 2026-10-03: US44 adds explicit overnight endpoint dates and DST occurrence choices, with
   Save/Discard/Cancel protection. D029 records the revised correction interaction; the original

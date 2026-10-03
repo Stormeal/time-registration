@@ -1,8 +1,9 @@
 # QI Flow
 
 QI Flow is a local-first Windows work-time tracker. Iteration 1 records work sessions,
-lunches, daily context, and weekly/monthly totals in a local SQLite database. Epic I adds
-user-confirmed Testhuset weekly fills. Google Sheets and SAP integrations remain deferred.
+lunches, daily context, and weekly/monthly totals in a local SQLite database. Optional Testhuset
+and DSB browser integrations use reviewed weekly fills. Google Sheets V2 synchronization requires
+per-machine authorization and a verified all-participant migration; SAP remains deferred.
 
 Active product work is tracked in [USER_STORIES.md](USER_STORIES.md). Completed stories and their
 acceptance criteria are preserved in [USER_STORIES_ARCHIVE.md](USER_STORIES_ARCHIVE.md).
@@ -21,11 +22,11 @@ From PowerShell:
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install --no-deps -r requirements/windows-build.txt
+python -m pip install --no-deps --no-build-isolation -e .
 ```
 
-Run the architecture shell:
+Run the application:
 
 ```powershell
 python -m qi_flow
@@ -35,16 +36,25 @@ Run all local checks:
 
 ```powershell
 .\scripts\check.ps1
+.\scripts\check-core.ps1
+python -m pip check
 ```
 
 Individual checks:
 
 ```powershell
-python -m ruff format --check src tests
-python -m ruff check src tests
+python -m ruff format --check src tests scripts
+python -m ruff check src tests scripts
 python -m mypy
 python -m pytest
 ```
+
+The full gate always imports this checkout's `src`, including when an editable install points
+elsewhere. `check-core.ps1` builds an independent environment under `.tmp/core-check`, installs
+the project without runtime dependencies, verifies Qt/browser/Google/credential packages are
+absent, and runs the explicit domain/application/SQLite selection with plugin autoload disabled.
+PR and push Windows CI run both gates from the pinned dependency files, using installed Edge for
+intercepted browser fixtures. Updating pins requires fresh clean-environment checks.
 
 ## Create a Windows installer
 
@@ -105,11 +115,23 @@ manual; the workflow only creates prereleases when you run it.
 - SQLite migration infrastructure: ready, including active-state recovery and captured rounding policy.
 - Desktop Today screen: Start work, Start/End lunch, Finish work, rounding selection, recovery, and Undo.
 - Tray and lifecycle: compact popover, context menu mirroring Today's state, explicit Close app
-  confirmation, single-instance focus, and optional Start with Windows.
+  confirmation, an OS-owned process lock, single-instance focus, and optional Start with Windows.
+  Without a tray, window close offers the same explicit exit flow. Exit/restore/update cancel and
+  join owned workers; replacement processes start after the process lock is released.
 - Timesheet review: month grouped by ISO week, daily totals, provisional active time, and weekly
   target progress with per-week overrides.
 - Reminders: configurable work/lunch thresholds with tray notifications and 15/30/60-minute snooze.
-- Functional user stories: US01–US04 and US09–US20 implemented and verified.
+- Automatic daily backups run off the UI thread, retain 30 daily copies, retry failures and
+  observe Copenhagen date/folder changes. Restore validates its source and keeps a safety copy.
+- Manual correction supports independent endpoint dates and explicit DST occurrences. Calendar
+  summaries and CSV exports clip effective work and deductions to the requested Copenhagen range.
+- Optional Google synchronization uses an immutable causal log, atomic local outbox capture,
+  verified readback and explicit conflict resolution. Opening, eligible local edits and five-minute
+  checks share one cancellable worker; closing retains pending changes for the next opening.
+- DSB hours include only explicitly selected scanned Testhuset branches. Both destination reviews
+  require Keep/Replace for every differing row and verify the external save.
+- Automated remediation evidence and open release checks are recorded in
+  [the progress report](docs/audits/2026-10-03-remediation-progress.md).
 - Packaging: `scripts/build-installer.ps1` produces a per-user Windows installer. A clean-account
   installation verification remains before release.
 - The same installer build creates `dist/QI-Flow-Update.zip`; the manual prerelease workflow

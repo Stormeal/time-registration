@@ -1,6 +1,6 @@
 # QI Flow architecture
 
-Version: 0.1 · Updated: 2026-10-03
+Version: 0.2 · Updated: 2026-10-04
 
 ## Architectural goals
 
@@ -109,16 +109,14 @@ numbered migration. Run migrations transactionally before constructing repositor
 
 ## Application boundary
 
-`TimeTrackingService` defines the intended use-case surface without implementing behavior yet.
-UI code should depend on that boundary, not concrete repositories. Commands and queries use
+`TimeTrackingApplicationService` owns tracking commands and calendar queries. UI code uses
+application services and ports, never concrete adapters or repositories. Commands and queries use
 immutable DTOs so adapters do not leak SQLite rows or Qt models into application logic.
 
-The first implementation sequence should be:
-
-1. US01–US04: clock, rounding policy, transaction service, and active-state recovery.
-2. US05–US08: editing, audit history, daily context, and sleep classification.
-3. US09–US14: Qt screens, tray state, summaries, and reminders.
-4. US15–US21: backup/restore, export, setup, diagnostics, and packaging.
+`application.desktop` and `application.backups` define export, release, startup, path and backup
+boundaries. The composition root injects their implementations and owns replacement-process launch.
+Shared aggregate validation lives in `domain.interval_validation`; sync capture, reconciliation,
+migration, conflict commands and scheduling have focused application modules.
 
 ## Testing strategy
 
@@ -127,6 +125,12 @@ The first implementation sequence should be:
 - UI tests use pytest-qt's `qtbot` to own widgets, simulate actions, and wait for signals.
 - One smoke test verifies application composition against a temporary data root.
 - Release verification uses the packaged executable on a clean Windows account.
+- `scripts/check.ps1` checks source, tests and maintained Python scripts, strict types and the
+  full suite. Recursive architecture checks resolve nested/relative imports and detect SQL/private
+  persistence access in widgets.
+- `scripts/check-core.ps1` installs the project without runtime adapters in an independent
+  environment, asserts Qt/Playwright/Google/keyring are absent and disables plugin autoload.
+- Windows PR/push and manual prerelease CI use the same pinned runtime/build dependency set.
 
 Prefer tests around rules and failure boundaries. Avoid tests that only restate widget text or
 dataclass fields.
@@ -136,7 +140,46 @@ dataclass fields.
 Google Sheets sync, Playwright/Testhuset, and SAP GUI scripting belong under `infrastructure`
 and implement new ports defined in `application`. They must not change domain entities into API
 payloads directly; mapping happens in their adapters. No future synchronization or submission
-code should be introduced in iteration 1 modules behind inactive flags.
+code should be introduced in iteration 1 modules behind inactive flags. Later decisions authorize
+the optional Google/Testhuset/DSB adapters now implemented; SAP remains deferred.
+
+## Background operations and replacement
+
+Qt's owned operation controller parents its worker, uses cooperative cancellation and joins native
+thread cleanup before signalling shutdown readiness. Google and backup controllers, updater check
+and download threads, and temporary Playwright workers participate in one runtime shutdown group.
+Exit, restore and explicit update restart freeze commands and drain that group. Restore validates
+and replaces SQLite while the process lock remains held. Only after the event loop ends and every
+worker joins does bootstrap release ownership and launch a replacement. Restore failure resumes
+controllers and tracking; a launch refusal is visible. Repeated close requests cannot replace the
+already approved restart command.
+
+Daily backup policy captures the destination and Copenhagen date and schedules opening, day/folder
+changes and failure retry. Each copy uses its worker's own bounded SQLite connections, staging and
+atomic replacement. The adapter caches derived catalog validity by folder/file metadata to avoid
+repeated integrity scans; restore and recovery independently revalidate their source and staged
+copy. See the measured [runtime profile](docs/audits/2026-10-04-runtime-profile.md).
+
+## Shared timesheet protocol
+
+Migration `0007_sync_changes.sql` stores target-bound immutable changes, complete atomic groups,
+publication attempts/readback, materialized bases, conflicts and quarantined variants. Completed
+eligible local mutations capture their outbox changes in the same transaction; active work and
+deductions remain local. Network calls run outside database transactions. Causal ancestry and
+explicit whole-aggregate validation determine materialization; revision/device order never chooses
+a winner. Tombstones and sync evidence outlive local recovery-history expiry.
+
+Existing V1 snapshot publication refuses writes. A separate append-only migration ledger retains
+raw V1 data and all declared participants' reviewed snapshots, with verified local safety copies.
+Verified all-participant cutover seeds V2 before enabling ordinary sync. A changed acknowledged
+history requires a fresh reviewed migration; it cannot silently supersede the acknowledgements.
+Opening, newly eligible groups and five-minute checks coalesce on one worker. Retry respects
+backoff, disable/configuration changes cancel obsolete work, and closing preserves the outbox for
+the next opening. Protocol details and limitations are in [google-sync-v2.md](docs/google-sync-v2.md).
+
+Calendar queries split at Copenhagen midnight and clip work/deductions before aggregation and
+rounding. Editors expose independent endpoint dates and reject missing DST times while allowing
+explicit occurrence selection for repeated times. Unsaved changes use Save/Discard/Cancel.
 
 ## Handoff checklist
 

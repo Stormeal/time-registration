@@ -1,6 +1,6 @@
 # QI Flow — active user stories
 
-Version: 1.5 · Updated: 2026-10-03 · Status: active backlog only
+Version: 1.6 · Updated: 2026-10-04 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
@@ -12,11 +12,10 @@ after its acceptance criteria pass and any required release smoke check is recor
 | --- | --- | --- |
 | In progress | US21 | Per-user installer and uninstall cleanup are implemented; clean-account install, upgrade, and uninstall verification remain. |
 | In progress | US32 | Rollback ownership repair is verified; packaged Windows update, uninstall preservation, and failure recovery checks remain. |
-| In progress | US28 | Make authorization responsive and cancellable; complete synchronization status and privacy safeguards. |
-| In progress | US29 | Replace unsafe snapshot publication, validate imports, and complete conflicts, record coverage, and scheduling. |
+| In progress | US28 | Bounded authorization, status, privacy and worker ownership pass automated checks; live workbook and packaged acceptance remain. |
+| In progress | US29 | V2 capture, readback, reconciliation, explicit conflicts and scheduling pass automated checks; live multi-client acceptance remains. |
 | In progress | US30 | Exact row targeting and explicit choices are verified; live DSB and packaged release checks remain. |
-| Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
-| In progress | US44 | Endpoint-date/DST editing and protected unsaved changes pass the 494-test gate; final branch review remains. |
+| In progress | US31 | Scanned-ID allowlist, coverage and review invalidation pass automated checks; live reviewed-fill acceptance remains. |
 | In progress | US45 | Explicit choices pass automated acceptance and review; destination release verification remains open. |
 | In progress | US46 | Upgrade existing shared Sheets data while preserving the sheet and every participating machine's history. |
 
@@ -172,32 +171,6 @@ The [October audit](docs/audits/2026-10-02-application-audit.md) and
 against their existing owning stories. A repair does not erase the archived acceptance criteria
 or become complete until its regression and quality gate pass. The following stories cover
 additional interactions or migration capability; proposed stories are not implemented behavior.
-
-### US44 — Correct overnight entries with explicit dates · P2
-
-Implementation status: **In progress** · explicit endpoint dates, DST occurrence choices, overnight
-identity/history, and Save/Discard/Cancel interactions pass automated acceptance and the 494-test
-quality gate. Final whole-branch review remains. Authorized on 2026-10-03 alongside A12, A13, and A16.
-This extends the
-historical time-only correction controls in US05 and US22.
-
-As a consultant, I want to correct the dates and times of overnight work and deductions so that
-the saved interval reflects what happened without splitting or silently shifting it.
-
-Acceptance criteria:
-
-- Selecting any Copenhagen date intersected by completed work exposes the same session ID,
-  including work that began on the previous date.
-- Manual and completed-entry editors show independently editable start and finish dates and
-  exact-minute times for work, lunch, and deducted breaks.
-- Saving preserves entry identity, validates ordering, future actual timestamps, work overlap,
-  deduction overlap and containment, and retains the existing 30-day recovery history.
-- Selecting another parent or changing a date never silently moves an existing endpoint. Any
-  initial suggested dates are visible before saving.
-- Changing rows or closing a dirty editor offers Save, Discard, and Cancel. Cancel retains the
-  current selection and unsaved input; failed Save leaves the editor open.
-- Invalid spring DST times are rejected; ambiguous autumn times require an explicit occurrence
-  choice. Daily, ISO-week, monthly, and export totals agree with the saved UTC interval.
 
 ### US45 — Choose each differing external value explicitly · P1
 

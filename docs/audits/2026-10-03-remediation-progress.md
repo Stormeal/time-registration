@@ -137,18 +137,18 @@ part of Task 19 before final lifecycle acceptance.
 | --- | --- | --- |
 | 1 — Diagnostic privacy | A05; US20, US28 | Complete; independently reviewed and integrated gate passed. |
 | 2 — Shared validation / restore | A06, prerequisite for A04; US05, US06 | Complete; 83 focused tests, independent review, integrated gate passed. |
-| 3 — Process and exit lifecycle | A08, A11, A17; US09–US11 | Core fix complete; 47 focused tests, review and integrated gate pass. Owned-worker shutdown is carried into Tasks 12–13. |
+| 3 — Process and exit lifecycle | A08, A11, A17; US09–US11 | Complete code and automated acceptance, including all-worker restore/restart shutdown in Task 19; real Windows release smoke remains. |
 | 4 — Updater ownership | A07; US32 | Complete; 23 focused tests, review and integrated gate pass; packaged release check remains open. |
 | 5 — Exact DSB row | A09; US30 | Complete; 29 focused tests, review and integrated gate pass; live DSB check remains open. |
 | 6 — Explicit row choices | A18; US45 | Complete code; 93 focused tests, review and integrated gate pass; destination release checks remain open. |
 | 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Automated implementation acceptance and integrated gates passed through Task 13. V2 sync requires verified migration; V1 sync refuses snapshot writes. Live multi-client and release checks remain. |
 | 14 — DSB allowlist | US31 | Automated acceptance and 634-test gate passed; live reviewed fill/release acceptance remains. |
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
-| 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |
+| 16 — Parent dates / overnight editing | A16; US44 | Complete; criteria, final gate and fresh branch review passed. US44 archived. |
 | 17 — Reminder identity | A15; US02, US14 | Complete; independent timers and stale-dialog guards pass 57 focused tests and the integrated gate. |
 | 18 — Unattended backups | A14; US15 | Automated acceptance and 645-test gate passed. |
-| 19 — Architecture / CI | Cross-cutting | Automated acceptance passed: 663 full tests, 311 independent core tests, clean locked environment and dependency checks. Final branch review remains. |
-| 20 — Windows and integration release gates | US21, US28–US32 | Pending. |
+| 19 — Architecture / CI | Cross-cutting | Complete; final full/core/clean-environment gates and branch review fixes verified. |
+| 20 — Windows and integration release gates | US21, US28–US32 | Documentation, automated gates and dry package build verified; real-account/install/workbook/live-fill acceptance remains open. |
 
 ## Implementation rulings
 
@@ -220,3 +220,15 @@ Backup status/list refresh performed 60 integrity scans and took 2,042.86 ms. De
 caching with file/folder/day/replacement invalidation tests reduced repeated refresh to 10.03 ms.
 Restore and recovery retain independent integrity validation. See
 [the profile evidence](2026-10-04-runtime-profile.md).
+
+## Final implementation checkpoint — 2026-10-04
+
+Source `c8c5b35` passed **672 tests in 83.16 seconds**, 146 formatted Python files, Ruff clean and
+strict mypy clean for 76 source modules. The clean locked environment passed **672 tests in
+75.54 seconds**; independent core passed **318 tests in 19.28 seconds** and both full environments
+passed `pip check`. The installer and update ZIP rebuilt successfully with the bundled smoke check.
+The fresh reviewer found no Critical issue. Confirmed recovery blockers now have RED→GREEN
+regressions for propagated conflict closure and malformed review; additional regressions protect
+active aggregates and extreme Retry-After values. No deferred minor code findings remain.
+
+See [release evidence and required real checks](../release-checks/2026-10-04-audit-remediation.md).

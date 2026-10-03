@@ -1,6 +1,6 @@
 # QI Flow — archived user-story register
 
-Archived: 2026-09-27 · Updated with completed Epic B stories
+Archived: 2026-09-27 · Updated: 2026-10-04 with completed US44 audit correction story
 
 This file preserves the original story definitions, acceptance criteria, and delivery notes. The
 current actionable backlog is maintained in `USER_STORIES.md`. Stories marked complete here are
@@ -15,6 +15,7 @@ These stories implement the confirmed local-only scope in `REQUIREMENTS.md` and 
 | --- | --- | --- |
 | Complete | US01–US04, US09–US20 | Implemented and covered by automated checks. |
 | Complete | US22–US24 | Implemented and covered by automated checks. |
+| Complete | US44 | Explicit overnight endpoint dates, DST choices and protected unsaved changes; final automated gate and branch review passed. |
 | Complete | US05–US08 | Correction, history, daily context, and sleep recovery implemented and covered by automated checks. |
 | In progress | US21 | Installer and uninstall cleanup are implemented; clean-account verification remains. |
 | Complete | US25–US27 | Epic I implemented and covered by automated checks; live first-fill and packaged smoke checks remain. |
@@ -780,3 +781,30 @@ Acceptance criteria:
   up and lunch deductions still use nearest rounding.
 - Enabled action buttons use the orange filled primary style or orange outlined alternative
   style across light and dark themes.
+
+## Audit remediation — completed stories
+
+### US44 — Correct overnight entries with explicit dates · P2
+
+Implementation status: **Complete** · 2026-10-04. Endpoint-date/DST, overnight identity/history
+and Save/Discard/Cancel acceptance passed the final 672-test gate and fresh branch review.
+Authorized on 2026-10-03 alongside A12, A13 and A16; extends the historical time-only controls
+in US05 and US22. Acceptance criteria below are unchanged.
+
+As a consultant, I want to correct the dates and times of overnight work and deductions so that
+the saved interval reflects what happened without splitting or silently shifting it.
+
+Acceptance criteria:
+
+- Selecting any Copenhagen date intersected by completed work exposes the same session ID,
+  including work that began on the previous date.
+- Manual and completed-entry editors show independently editable start and finish dates and
+  exact-minute times for work, lunch, and deducted breaks.
+- Saving preserves entry identity, validates ordering, future actual timestamps, work overlap,
+  deduction overlap and containment, and retains the existing 30-day recovery history.
+- Selecting another parent or changing a date never silently moves an existing endpoint. Any
+  initial suggested dates are visible before saving.
+- Changing rows or closing a dirty editor offers Save, Discard, and Cancel. Cancel retains the
+  current selection and unsaved input; failed Save leaves the editor open.
+- Invalid spring DST times are rejected; ambiguous autumn times require an explicit occurrence
+  choice. Daily, ISO-week, monthly, and export totals agree with the saved UTC interval.

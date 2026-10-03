@@ -1,6 +1,6 @@
 # QI Flow architecture
 
-Version: 0.1 · Updated: 2026-09-15
+Version: 0.1 · Updated: 2026-10-03
 
 ## Architectural goals
 
@@ -51,7 +51,7 @@ src/qi_flow/
     system.py                 system clock and UUID identifier generators
     startup.py                optional "Start with Windows" registry adapter
     updates.py                HTTPS release checks and SHA-256-verified package staging
-    single_instance.py        QLocalServer/QLocalSocket single-instance guard
+    single_instance.py        native process ownership lock plus Qt focus socket
     sqlite/
       database.py             connections, transactions, migration runner
       repositories.py         SQLite adapters for every application port
@@ -75,10 +75,16 @@ tests/
 1. `qi_flow.__main__.main` calls the composition root.
 2. The composition root sets Qt organization/application metadata before resolving paths.
 3. `QStandardPaths.AppLocalDataLocation` supplies the per-user root.
-4. Logging and SQLite migrations initialize before the main window appears.
-5. `QApplication.setQuitOnLastWindowClosed(False)` keeps the process alive in the tray.
-6. The tray controller owns explicit process exit. Feature controllers will later own active
-   session warnings and recovery decisions.
+4. Create the data directory and acquire its exclusive native Windows file lock before opening
+   SQLite or running migrations. The OS releases ownership on process exit/crash. A second
+   process uses the Qt local socket only to request focus and exits without opening SQLite;
+   failure to deliver focus never authorizes taking ownership. Lock I/O failures are visible.
+5. Initialize privacy-filtered logging and SQLite migrations before constructing the window.
+6. `QApplication.setQuitOnLastWindowClosed(False)` keeps the process alive in the tray. If no
+   tray is available, window close and the visible Close app action use the same exit coordinator.
+7. Exit confirmation follows successful persisted Finish or explicit Keep running. Cancellation,
+   pending sleep, invalid finish, or save failure keep the window accessible. Stop owned workers
+   before releasing the process lock.
 
 No database connection is shared across threads. Open a short-lived connection or transaction
 per application operation. UI updates always return to the Qt main thread through signals.

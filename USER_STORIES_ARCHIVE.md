@@ -84,6 +84,8 @@ Acceptance criteria:
 
 Implementation status: **Complete** · verified by integration and UI tests.
 
+Audit amendment (2026-10-03): edits and history restores validate the affected aggregate before audit/save. Invalid restored boundaries, open deductions under completed parents, and overlapping work are refused transactionally; unrelated legacy defects can be repaired independently (A06).
+
 As a consultant, I want to add or correct work and lunch intervals so that forgotten or inaccurate entries can be repaired.
 
 Acceptance criteria:
@@ -98,6 +100,8 @@ Acceptance criteria:
 ### US06 — Delete, undo, and recover changes · P1
 
 Implementation status: **Complete** · verified by integration and UI tests.
+
+Audit amendment (2026-10-03): restoring a before-image is subject to the same current aggregate rules as editing. A refusal preserves both persisted entries and audit history for a subsequent correction (A06).
 
 As a consultant, I want safe correction controls so that an accidental edit or deletion does not permanently destroy my record.
 
@@ -143,6 +147,8 @@ Acceptance criteria:
 
 Implementation status: **Complete** · verified by `tests/ui/test_tray.py`.
 
+Audit amendment (2026-10-03): without a system tray, window close and a visible Close app action use the shared exit coordinator. Cancel or failed Finish keeps the window accessible (A17).
+
 As a consultant, I want QI Flow available from the tray so that tracking does not occupy my taskbar or interrupt other work.
 
 Acceptance criteria:
@@ -156,6 +162,8 @@ Acceptance criteria:
 
 Implementation status: **Complete** · verified by `tests/ui/test_exit_dialog.py`.
 
+Audit amendment (2026-10-03): Finish and close emits process exit only after successful persistence. Pending sleep, invalid finish, and persistence failures leave the timer recoverable; explicit Keep running still allows exit (A11).
+
 As a consultant, I want an explicit warning when closing QI Flow during active tracking so that I choose what happens to the session.
 
 Acceptance criteria:
@@ -168,8 +176,11 @@ Acceptance criteria:
 
 ### US11 — Start once and focus the existing app · P1
 
-Implementation status: **Complete** · verified by `tests/ui/test_single_instance.py` and
-`tests/unit/test_startup.py`.
+Implementation status: **Complete** · startup verified by `tests/unit/test_startup.py`; ownership
+regressions are in `tests/ui/test_single_instance.py`,
+`tests/integration/test_single_instance_processes.py`, and `tests/ui/test_bootstrap_lifecycle.py`.
+
+Audit amendment (2026-10-03): exclusive OS ownership is acquired before opening SQLite, including while the primary is not yet listening for focus. Failed focus delivery does not permit a second database owner. Crash/normal exit releases native Windows ownership (A08).
 
 As a consultant, I want predictable Windows startup and single-instance behavior so that two processes cannot alter the same database.
 
@@ -259,6 +270,8 @@ Acceptance criteria:
 
 Implementation status: **Complete**.
 
+Audit amendment (2026-10-03): detailed export clips to the selected Copenhagen calendar period and splits work/deduction fragments at local midnight. Completed legacy boundaries use the same fallback as summaries; active/deleted records and raw action metadata are excluded (A13).
+
 As a consultant, I want CSV exports so that I can inspect or reuse my local records outside QI Flow.
 
 Acceptance criteria:
@@ -299,6 +312,11 @@ Acceptance criteria:
 ### US20 — Diagnose locally without telemetry · P2
 
 Implementation status: **Complete**.
+
+Audit amendment (2026-10-03): D066 and the current privacy requirement strengthen the historical
+criteria below. Persistent diagnostics contain only approved application events and never store
+credentials, OAuth callback URLs/codes/state/tokens, notes, or time-entry contents, including
+dependency requests and exception payloads. Audit A05 tracks the regression and verification.
 
 As a user, I want privacy-safe local diagnostics so that problems can be investigated without sending my work records elsewhere.
 

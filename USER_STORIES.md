@@ -11,14 +11,14 @@ after its acceptance criteria pass and any required release smoke check is recor
 | Status | Stories | Remaining work |
 | --- | --- | --- |
 | In progress | US21 | Per-user installer and uninstall cleanup are implemented; clean-account install, upgrade, and uninstall verification remain. |
-| In progress | US32 | Repair rollback ownership and verify packaged Windows update, uninstall preservation, and failure recovery. |
+| In progress | US32 | Rollback ownership repair is verified; packaged Windows update, uninstall preservation, and failure recovery checks remain. |
 | In progress | US28 | Make authorization responsive and cancellable; complete synchronization status and privacy safeguards. |
 | In progress | US29 | Replace unsafe snapshot publication, validate imports, and complete conflicts, record coverage, and scheduling. |
-| In progress | US30 | Correct allocation-specific row targeting, then complete live DSB and release verification. |
+| In progress | US30 | Exact row targeting and explicit choices are verified; live DSB and packaged release checks remain. |
 | Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
-| Proposed | US44 | Correct overnight work and deductions with visible endpoint dates and protected unsaved edits. |
-| Not started | US45 | Require explicit Keep or Replace for every differing Testhuset and DSB row; user confirmed on 2026-10-03. |
-| Proposed | US46 | Upgrade existing shared Sheets data while preserving the sheet and every participating machine's history. |
+| In progress | US44 | Endpoint-date/DST editing and protected unsaved changes pass the 494-test gate; final branch review remains. |
+| In progress | US45 | Explicit choices pass automated acceptance and review; destination release verification remains open. |
+| Not started | US46 | Upgrade existing shared Sheets data while preserving the sheet and every participating machine's history. |
 
 ## Epic G — Setup, settings, and distribution
 
@@ -40,8 +40,8 @@ Acceptance criteria:
 ### US32 — Update QI Flow in place · P2
 
 Implementation status: **In progress** · verified download and preservation of installed uninstall
-files are implemented. The October audit found that a preflight refusal can wrongly roll back an
-unrelated recovery folder (A07); repair and packaged Windows verification remain.
+files are implemented. A07 rollback ownership repair passes regression tests and the integrated
+quality gate; packaged Windows update/rollback verification remains.
 
 As a QI Flow user, I want to receive and apply verified application updates from inside the app so
 that I do not have to find, download, and run a new installer for every release.
@@ -116,9 +116,9 @@ Acceptance criteria:
 
 ### US30 — Review and insert DSB hours · P1
 
-Implementation status: **In progress** · review and explicit send exist. The October audit found
-that row selection ignores the requested allocation (A09); exact row targeting, the US45 choice
-policy, a live DSB smoke check, and release verification remain.
+Implementation status: **In progress** · allocation/date targeting, row-reorder verification, and
+the US45 explicit-choice policy pass automated regressions and the integrated quality gate.
+A live reviewed DSB smoke check and packaged release verification remain.
 
 As a DSB consultant, I want to review and insert a selected ISO week's completed hours into DSB so that I do not have to re-enter them manually.
 
@@ -170,7 +170,10 @@ additional interactions or migration capability; proposed stories are not implem
 
 ### US44 — Correct overnight entries with explicit dates · P2
 
-Implementation status: **Proposed** · planned alongside A12, A13, and A16. This extends the
+Implementation status: **In progress** · explicit endpoint dates, DST occurrence choices, overnight
+identity/history, and Save/Discard/Cancel interactions pass automated acceptance and the 494-test
+quality gate. Final whole-branch review remains. Authorized on 2026-10-03 alongside A12, A13, and A16.
+This extends the
 historical time-only correction controls in US05 and US22.
 
 As a consultant, I want to correct the dates and times of overnight work and deductions so that
@@ -193,7 +196,10 @@ Acceptance criteria:
 
 ### US45 — Choose each differing external value explicitly · P1
 
-Implementation status: **Not started** · confirmed by the user on 2026-10-03 for Testhuset and DSB.
+Implementation status: **In progress** · explicit choices and application validation pass automated
+acceptance, independent review, and the 433-test integrated quality gate. Destination live-fill
+and packaged release checks remain open under US30 and the remediation plan. Confirmed by the user on
+2026-10-03 for Testhuset and DSB.
 This supersedes archived US27's default-to-Replace interaction; D097 and D102 govern the new flow.
 
 As a consultant, I want to choose Keep or Replace for every differing external row so that filling
@@ -212,7 +218,8 @@ Acceptance criteria:
 
 ### US46 — Upgrade a shared timesheet without losing history · P1
 
-Implementation status: **Proposed** · required before enabling the replacement sync protocol for
+Implementation status: **Not started** · authorized with the remediation plan on 2026-10-03;
+required before enabling the replacement sync protocol for
 an existing V1 workbook. US29 remains the owner of ordinary synchronization and backup reconciliation.
 
 As a consultant using QI Flow on several machines, I want a guided sync-format upgrade so that
@@ -255,5 +262,7 @@ Acceptance criteria:
   `USER_STORIES_ARCHIVE.md`.
 - US43 (Epic Q, daily action layout and fair start rounding) is complete and archived in
   `USER_STORIES_ARCHIVE.md`.
-- US44 and US46 are proposed audit follow-ups; US45 records the explicit row-choice requirement
-  confirmed on 2026-10-03. The implementation plan is ready for review; implementation has not started.
+- US44 passes automated implementation acceptance; US46 remains a planned audit follow-up.
+  US45 records the explicit row-choice requirement
+  confirmed on 2026-10-03. The user authorized implementation of the remediation plan on
+  2026-10-03; task and verification progress is recorded alongside the plan.

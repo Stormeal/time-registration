@@ -10,7 +10,7 @@
 
 **Spec:** [Application audit](../../audits/2026-10-02-application-audit.md), [requirements](../../../REQUIREMENTS.md), [decisions](../../../DECISIONS.md), [active stories](../../../USER_STORIES.md), [archived acceptance criteria](../../../USER_STORIES_ARCHIVE.md), and [architecture](../../../ARCHITECTURE.md).
 
-**Status:** Planning only. No application changes have been made. The audited baseline is commit `61b507f6a306263effc701bc0eedb03ee9a01ecd`; its quality gate passed with 258 tests. That result does not establish that the planned fixes pass.
+**Status:** Implementation authorized and started on 2026-10-03 in the attached `codex/audit-remediation-2026-10-03` worktree. The audited baseline is commit `61b507f6a306263effc701bc0eedb03ee9a01ecd`; its quality gate passed with 258 tests. [Remediation progress](../../audits/2026-10-03-remediation-progress.md) records completed slices and fresh verification; the baseline result does not establish that the fixes pass.
 
 ## Global Constraints
 
@@ -86,10 +86,10 @@ PowerShell commands assume the repository root and `.\.venv\Scripts\python.exe`.
 
 **Files:** Modify `src/qi_flow/infrastructure/logging.py`, `src/qi_flow/infrastructure/google_oauth.py`; create `tests/unit/test_logging_privacy.py`.
 
-- [ ] Add `test_oauth_callback_never_reaches_diagnostic_file`: invoke the installed OAuth request handler with synthetic code/state and assert neither those values nor the callback URL reaches the actual rotating log file. Include synthetic token/credential exceptions and ordinary approved application events.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_logging_privacy.py -q` and confirm the callback regression fails.
-- [ ] Restrict persisted diagnostics to approved application events; suppress dependency HTTP/auth request logging and sanitize failures before logging. Preserve useful error categories without payloads. Ensure installing logging twice does not duplicate handlers.
-- [ ] Re-run the focused tests and the quality gate. Record the privacy guarantee under US20/US28; do not delete existing user logs automatically.
+- [x] Add `test_oauth_callback_never_reaches_diagnostic_file`: invoke the installed OAuth request handler with synthetic code/state and assert neither those values nor the callback URL reaches the actual rotating log file. Include synthetic token/credential exceptions and ordinary approved application events.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_logging_privacy.py -q` and confirm the callback regression fails.
+- [x] Restrict persisted diagnostics to approved application events; suppress dependency HTTP/auth request logging and sanitize failures before logging. Preserve useful error categories without payloads. Ensure installing logging twice does not duplicate handlers.
+- [x] Re-run the focused tests and the quality gate. Record the privacy guarantee under US20/US28; do not delete existing user logs automatically.
 
 ### Task 2: Share aggregate validation and make restoration transactional — A06, prerequisite for A04
 
@@ -97,44 +97,45 @@ PowerShell commands assume the repository root and `.\.venv\Scripts\python.exe`.
 
 **Contract:** `validate_intervals(sessions: Sequence[WorkSession], deductions: Sequence[Deduction], *, as_of: datetime) -> None` raises `DomainError` for invalid live aggregates. Exclude soft-deleted entries internally; interpret open spans through `as_of`. Actual timestamps cannot be in the future, while valid effective rounding may extend a completed finish past the press time as existing rules permit.
 
-- [ ] Add `test_restore_open_lunch_requires_active_parent` using delete running work/lunch → restore work → finish → restore lunch. Assert rejection and unchanged SQLite/audit state; later work can still start lunch.
-- [ ] Add `test_restore_open_work_rejects_completed_overlap`: restore 08:00 open work at noon over saved 09:00–10:00 work. Assert rejection and no five-hour total over the four-hour span.
-- [ ] Add pure cases for multiple active parents/deductions, missing parents, overlaps, out-of-parent deductions, invalid actual/effective boundaries, valid outward rounding, and touching intervals.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_interval_validation.py tests/integration/test_time_tracking.py -q`.
-- [ ] Extract existing rules without changing accepted rounding. Use the validator for edit and history-restoration candidate aggregates before writes; keep validation and audit writes in one unit of work. Expose the same validator to sync reconciliation.
-- [ ] Re-run and gate; document refusal/recovery behavior under US05/US06.
+- [x] Add `test_restore_open_lunch_requires_active_parent` using delete running work/lunch → restore work → finish → restore lunch. Assert rejection and unchanged SQLite/audit state; later work can still start lunch.
+- [x] Add `test_restore_open_work_rejects_completed_overlap`: restore 08:00 open work at noon over saved 09:00–10:00 work. Assert rejection and no five-hour total over the four-hour span.
+- [x] Add pure cases for multiple active parents/deductions, missing parents, overlaps, out-of-parent deductions, invalid actual/effective boundaries, valid outward rounding, and touching intervals.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_interval_validation.py tests/integration/test_time_tracking.py -q`.
+- [x] Extract existing rules without changing accepted rounding. Use the validator for edit and history-restoration candidate aggregates before writes; keep validation and audit writes in one unit of work. Expose the same validator to sync reconciliation.
+- [x] Re-run and gate; document refusal/recovery behavior under US05/US06.
 
 ### Task 3: Own the database exclusively and exit only after the selected action succeeds — A08, A11, A17
 
-**Files:** Modify `src/qi_flow/infrastructure/single_instance.py`, `src/qi_flow/bootstrap.py`, `src/qi_flow/ui/exit_dialog.py`, `src/qi_flow/ui/main_window.py`; extend `tests/ui/test_single_instance.py`, `tests/ui/test_exit_dialog.py`, `tests/ui/test_main_window.py`; create `tests/integration/test_single_instance_processes.py`.
+**Files:** Modify `src/qi_flow/infrastructure/single_instance.py`, `src/qi_flow/bootstrap.py`, `src/qi_flow/ui/exit_dialog.py`, `src/qi_flow/ui/main_window.py`, `src/qi_flow/infrastructure/sqlite/database.py`; extend `tests/ui/test_single_instance.py`, `tests/ui/test_exit_dialog.py`, `tests/ui/test_main_window.py`; create `tests/integration/test_single_instance_processes.py`, `tests/ui/test_bootstrap_lifecycle.py`; extend `tests/integration/test_database.py`.
 
-- [ ] Add barrier-coordinated real Windows process launches. Assert exactly one acquires ownership before any database initialization; the other requests focus and does not open SQLite. Cover primary not yet listening, normal release, crash recovery, and lock-path permission failure.
-- [ ] Add finish-and-close tests with pending sleep, invalid finish, and persistence failure. Assert no `exit_confirmed`, the timer remains recoverable, and the user can cancel or resolve the failure.
-- [ ] Add no-tray close tests for inactive exit and active Cancel/Keep running/Finish. Assert the window remains accessible on cancellation or failed finish.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_single_instance_processes.py tests/ui/test_single_instance.py tests/ui/test_exit_dialog.py tests/ui/test_main_window.py -q`.
-- [ ] Acquire a per-data-directory `QLockFile` before migrations, retain it for the process lifetime, and use the existing socket only for focus. Set `setStaleLockTime(0)` and use a short nonblocking attempt, following [Qt's long-lived lock guidance](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QLockFile.html). Never remove a live owner's lock merely because focus delivery failed. Test the documented Windows non-ASCII-hostname stale-lock limitation; if crash recovery cannot be made reliable, replace the lock adapter with a Windows named mutex and retain the same process tests.
+- [x] Add barrier-coordinated real Windows process launches. Assert exactly one acquires ownership before any database initialization; the other requests focus and does not open SQLite. Cover primary not yet listening, normal release, crash recovery, and lock-path permission failure.
+- [x] Add finish-and-close tests with pending sleep, invalid finish, and persistence failure. Assert no `exit_confirmed`, the timer remains recoverable, and the user can cancel or resolve the failure.
+- [x] Add no-tray close tests for inactive exit and active Cancel/Keep running/Finish. Assert the window remains accessible on cancellation or failed finish.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_single_instance_processes.py tests/ui/test_single_instance.py tests/ui/test_exit_dialog.py tests/ui/test_main_window.py -q`.
+- [x] Acquire a per-data-directory native OS file lock on Windows before migrations and retain its descriptor for the process lifetime; the existing socket is only for focus. OS ownership releases on process exit/crash and uses no PID, hostname, or age-based stale heuristic. Refusal to deliver focus never permits removing ownership. Other platforms retain a non-expiring Qt lock fallback. Cover Unicode paths, simultaneous startup, pre-listen startup, crash release, and permission/I/O errors with real Windows process tests. This execution ruling supersedes the initial Qt-lock/named-mutex proposal.
 - [ ] Emit exit only after successful finish persistence or explicit Keep running. Give no-tray users the same exit coordinator through window close and a visible Close app action. Shut down workers before releasing database ownership.
-- [ ] Re-run and gate; update architecture runtime ordering and US09–US11 behavior documentation.
+- [x] Close SQLite connections on configuration failure so retained exceptions cannot block corrupt-file recovery. Restore while owned, release ownership before replacement launch, and report failed launch.
+- [x] Re-run and gate; update architecture runtime ordering and US09–US11 behavior documentation.
 
 ### Task 4: Roll back only files swapped by this updater attempt — A07
 
 **Files:** Modify `scripts/update_helper.py`; extend `tests/integration/test_update_helper.py` and `tests/unit/test_packaging.py`.
 
-- [ ] Add `test_main_preflight_refusal_preserves_existing_recovery`: current executable contains `current-good`, unrelated `.previous` contains `older-release`. Assert failure leaves both trees byte-for-byte intact.
-- [ ] Test failure before swap, after current→recovery, after staged→current, during relaunch, and during cleanup. Assert user data and uninstall files survive, and failed cleanup does not destroy the only usable installation.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_update_helper.py tests/unit/test_packaging.py -q`.
-- [ ] Track swap state and the recovery path owned by this invocation explicitly. Preflight errors never enter rollback; post-swap rollback uses only the owned recovery tree. Verify resolved file targets stay inside the named staging/install/recovery roots before moving or deleting them.
-- [ ] Re-run and gate. Keep packaged update/rollback testing open under US32 until Task 20.
+- [x] Add `test_main_preflight_refusal_preserves_existing_recovery`: current executable contains `current-good`, unrelated `.previous` contains `older-release`. Assert failure leaves both trees byte-for-byte intact.
+- [x] Test failure before swap, after current→recovery, after staged→current, during relaunch, and during cleanup. Assert user data and uninstall files survive, and failed cleanup does not destroy the only usable installation.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_update_helper.py tests/unit/test_packaging.py -q`.
+- [x] Track swap state and the recovery path owned by this invocation explicitly. Preflight errors never enter rollback; post-swap rollback uses only the owned recovery tree. Verify resolved file targets stay inside the named staging/install/recovery roots before moving or deleting them.
+- [x] Re-run and gate. Keep packaged update/rollback testing open under US32 until Task 20.
 
 ### Task 5: Target the exact DSB date and allocation — A09
 
-**Files:** Modify `src/qi_flow/infrastructure/dsb_browser.py`; extend `tests/unit/test_dsb_browser.py`; create `tests/integration/test_dsb_browser.py` with local Edge HTML fixtures.
+**Files:** Modify `src/qi_flow/infrastructure/dsb_browser.py`; extend `tests/unit/test_dsb_browser.py`; create `tests/integration/test_dsb_browser_rows.py` with local Edge HTML fixtures.
 
-- [ ] Add a day with Allocation A=`4.00` and B=`2.00`. Reading/writing B must use B and leave A unchanged. Assert the actual row identity and saved field values.
-- [ ] Add missing and duplicate date/allocation matches, ISO-year boundary, changed allocation after preview, and uncertain save response. Assert no write/send on ambiguity.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_dsb_browser.py tests/integration/test_dsb_browser.py -q`.
-- [ ] Match stable allocation identity within the selected date/week and require one row. Missing rows produce an actionable refusal; do not repurpose another allocation. Implement insertion of a new empty row only as a separately tested change after the live DOM contract is verified.
-- [ ] Re-run and gate. Retain DSB Send after confirmed writes and forbid approval/locking.
+- [x] Add a day with Allocation A=`4.00` and B=`2.00`. Reading/writing B must use B and leave A unchanged. Assert the actual row identity and saved field values.
+- [x] Add missing and duplicate date/allocation matches, ISO-year boundary, changed allocation after preview, and uncertain save response. Assert no write/send on ambiguity.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_dsb_browser.py tests/integration/test_dsb_browser_rows.py -q`.
+- [x] Match stable allocation identity within the selected date/week and require one row. Missing rows produce an actionable refusal; do not repurpose another allocation. Implement insertion of a new empty row only as a separately tested change after the live DOM contract is verified.
+- [x] Re-run and gate. Retain DSB Send after confirmed writes and forbid approval/locking.
 
 ### Task 6: Require complete external row decisions — A18, US45
 
@@ -142,11 +143,11 @@ PowerShell commands assume the repository root and `.\.venv\Scripts\python.exe`.
 
 **Contract:** `FillDecision` has KEEP/REPLACE; `FillDecisions = Mapping[int, FillDecision]`. Both service `fill` methods receive the complete decisions mapping and existing explicit `confirmed` flag. A mapping is complete exactly when its keys are all and only differing preview-slot indices.
 
-- [ ] Parameterize dialog tests for Testhuset and DSB: blank/zero/different slots start unselected, Fill is disabled until all decisions are made, returning one row to unselected disables it again, and matching slots need no selection.
-- [ ] Test direct service calls with missing/invalid choices, stale local assignments, changed remote values, cancellation, and partial-save failure. Assert only explicitly replaced slots are written and no blind retry occurs.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_testhuset_ui.py tests/integration/test_testhuset.py tests/unit/test_dsb_service.py -q`.
-- [ ] Add an unselected prompt to each differing row; validate complete choices in the application boundary before any writes. Preserve browser cleanup, fresh-preview requirements, and destination-specific confirmation/send behavior.
-- [ ] Re-run and gate. Preserve archived US27 and reference the 2026-10-03 decision confirmation and US45.
+- [x] Parameterize dialog tests for Testhuset and DSB: blank/zero/different slots start unselected, Fill is disabled until all decisions are made, returning one row to unselected disables it again, and matching slots need no selection.
+- [x] Test direct service calls with missing/invalid choices, stale local assignments, changed remote values, cancellation, and partial-save failure. Assert only explicitly replaced slots are written and no blind retry occurs.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_testhuset_ui.py tests/integration/test_testhuset.py tests/unit/test_dsb_service.py -q`.
+- [x] Add an unselected prompt to each differing row; validate complete choices in the application boundary before any writes. Preserve browser cleanup, fresh-preview requirements, and destination-specific confirmation/send behavior.
+- [x] Re-run and gate. Preserve archived US27 and reference the 2026-10-03 decision confirmation and US45.
 
 ## Phase 2: Replace unsafe synchronization before scheduling it
 
@@ -270,34 +271,34 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Contract:** `local_day_bounds(work_date: date) -> tuple[datetime, datetime]` returns UTC bounds computed from that date's local midnight and the next local date's midnight. Export uses existing midnight splitting plus intersection clipping for work and deductions.
 
-- [ ] Test 29 March 2026 (23-hour day) and 25 October 2026 (25-hour day), first/final hours and adjacent-date exclusion. The 25 October 23:15–23:45 session appears in details and contributes 1,800 seconds.
-- [ ] Test September 30 23:00→October 1 01:00: October detail export contains only 3,600 work seconds on October 1. Include deductions entirely outside and partially inside the selected period, midnight/week/month/ISO-year crossings, and both DST transitions.
-- [ ] Assert detailed work minus deducted fragments equals summary net seconds for each local date and selected period. Preserve UTF-8, semicolons, Danish formats, and exclusion of deleted/actual-press metadata.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_time_rules.py tests/integration/test_today_summary.py tests/integration/test_backups_and_exports.py -q`.
-- [ ] Reuse the calendar helper for detail queries and export bounds; clip before emitting daily fragments. Do not assume 86,400 elapsed seconds for a local date.
-- [ ] Re-run and gate; document split detailed rows under US17 and use the helper in Task 16.
+- [x] Test 29 March 2026 (23-hour day) and 25 October 2026 (25-hour day), first/final hours and adjacent-date exclusion. The 25 October 23:15–23:45 session appears in details and contributes 1,800 seconds.
+- [x] Test September 30 23:00→October 1 01:00: October detail export contains only 3,600 work seconds on October 1. Include deductions entirely outside and partially inside the selected period, midnight/week/month/ISO-year crossings, and both DST transitions.
+- [x] Assert detailed work minus deducted fragments equals summary net seconds for each local date and selected period. Preserve UTF-8, semicolons, Danish formats, and exclusion of deleted/actual-press metadata.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_time_rules.py tests/integration/test_today_summary.py tests/integration/test_backups_and_exports.py -q`.
+- [x] Reuse the calendar helper for detail queries and export bounds; clip before emitting daily fragments. Do not assume 86,400 elapsed seconds for a local date.
+- [x] Re-run and gate; document split detailed rows under US17 and use the helper in Task 16.
 
 ### Task 16: Fix parent dates and add explicit overnight correction — A16, proposed US44
 
-**Files:** Modify `src/qi_flow/ui/manual_entry_dialog.py`, `src/qi_flow/ui/session_editor_dialog.py`, `src/qi_flow/ui/timesheet_page.py`; create `src/qi_flow/ui/date_time_input.py`, `tests/ui/test_overnight_editing.py`; extend `tests/ui/test_compact_follow_up.py`, `tests/integration/test_time_tracking.py`.
+**Files:** Modify `src/qi_flow/ui/manual_entry_dialog.py`, `src/qi_flow/ui/session_editor_dialog.py`, `src/qi_flow/ui/timesheet_page.py`; create `src/qi_flow/ui/date_time_input.py`, `tests/ui/test_overnight_editing.py`; extend `tests/ui/test_compact_follow_up.py`; create `tests/integration/test_overnight_edits.py`.
 
-- [ ] First add the A16 regression: open Add entry for October 2, select October 1 parent work, enter 12:00–12:30; visible dates and saved UTC interval belong to October 1 and remain inside that parent.
-- [ ] Test selecting either side of an overnight session, editing independent endpoint dates, cross-midnight lunch, preservation of session ID/history, and recalculated daily/weekly totals.
-- [ ] Test dirty row changes/close with Save/Discard/Cancel and failed Save. Cancel retains both input and selection; choosing a different parent does not silently move existing endpoints.
-- [ ] Test nonexistent 29 March 02:30 and both occurrences of 25 October 02:30. Reject the former; explicitly choose the earlier/later UTC occurrence for the latter. Test future actual timestamps and invalid order/containment.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_overnight_editing.py tests/ui/test_compact_follow_up.py tests/integration/test_time_tracking.py -q`.
-- [ ] Repair the existing parent-date bug as its own small commit, then add the proposed US44 interaction. Use visible date/time controls and an explicit repeated-hour occurrence choice; preserve exact-minute manual semantics and Task 2 validation. Never use automatic midnight rollover inference for edited endpoints.
-- [ ] Re-run and gate; record the new endpoint-date/DST interaction decision when US44 is implemented.
+- [x] First add the A16 regression: open Add entry for October 2, select October 1 parent work, enter 12:00–12:30; visible dates and saved UTC interval belong to October 1 and remain inside that parent.
+- [x] Test selecting either side of an overnight session, editing independent endpoint dates, cross-midnight lunch, preservation of session ID/history, and recalculated daily/weekly totals.
+- [x] Test dirty row changes/close with Save/Discard/Cancel and failed Save. Cancel retains both input and selection; choosing a different parent does not silently move existing endpoints.
+- [x] Test nonexistent 29 March 02:30 and both occurrences of 25 October 02:30. Reject the former; explicitly choose the earlier/later UTC occurrence for the latter. Test future actual timestamps and invalid order/containment.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_overnight_editing.py tests/ui/test_compact_follow_up.py tests/integration/test_overnight_edits.py -q`.
+- [x] Repair the existing parent-date bug as its own small commit, then add the proposed US44 interaction. Use visible date/time controls and an explicit repeated-hour occurrence choice; preserve exact-minute manual semantics and Task 2 validation. Never use automatic midnight rollover inference for edited endpoints.
+- [x] Re-run and gate; record the new endpoint-date/DST interaction decision when US44 is implemented.
 
 ### Task 17: Scope lunch reminders to each deduction — A15
 
 **Files:** Modify `src/qi_flow/application/time_tracking.py`; extend `tests/integration/test_time_tracking.py` and `tests/ui/test_tray.py`.
 
-- [ ] Add `test_second_lunch_in_same_work_gets_own_reminder`: each of two lunches crossing the 45-minute threshold produces its own reminder. Snoozing the first never suppresses the second; a snoozed current lunch respects 15/30/60 minutes.
-- [ ] Cover lunch end, deletion, undo, restart, and parent work reminder independence with an injected clock.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_time_tracking.py tests/ui/test_tray.py -q`.
-- [ ] Key lunch notification/snooze state by deduction ID and work state by session ID. Ignore obsolete legacy parent-keyed lunch state and retire only the finished deduction's reminder state.
-- [ ] Re-run and gate under US02/US14.
+- [x] Add `test_second_lunch_in_same_work_gets_own_reminder`: each of two lunches crossing the 45-minute threshold produces its own reminder. Snoozing the first never suppresses the second; a snoozed current lunch respects 15/30/60 minutes.
+- [x] Cover lunch end, deletion, undo, restart, and parent work reminder independence with an injected clock.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_time_tracking.py tests/ui/test_tray.py -q`.
+- [x] Key lunch notification/snooze state by deduction ID and work state by session ID. Ignore obsolete legacy parent-keyed lunch state and retire only the finished deduction's reminder state.
+- [x] Re-run and gate under US02/US14.
 
 ### Task 18: Create daily backups while the app stays open — A14
 

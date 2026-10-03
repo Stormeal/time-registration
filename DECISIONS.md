@@ -38,18 +38,19 @@ This file records the shared understanding reached during the design interview. 
 | D026 | Overlapping work sessions, lunches or breaks outside their parent session, end-before-start, and multiple open intervals are blocked. Only timer actions create open intervals. |
 | D027 | Timer actions offer Undo for 30 seconds. Deleted records and previous edited values remain recoverable for 30 days. Completed time data otherwise remains indefinitely. |
 | D028 | Form edits require Save. Closing a form with unsaved changes asks whether to discard them. |
+| D029 | Manual entry and session correction show independent endpoint dates and exact-minute Copenhagen times. Any intersected day opens the same overnight session. Nonexistent spring times are refused; repeated autumn times require an occurrence choice. Dirty row changes and close offer Save, Discard, and Cancel; failed Save or Cancel retains the draft and selection. |
 
 ## Tray, startup, and recovery
 
 | ID | Confirmed decision |
 | --- | --- |
-| D030 | Closing the main window minimizes QI Flow to the tray and does not affect the current session. |
-| D031 | The process exits only through **Close app** in the tray context menu. With an active session, offer Keep running and close, Finish work and close, or Cancel; Cancel is selected by default. |
+| D030 | With a system tray, closing the main window minimizes QI Flow to the tray and does not affect the current session. Without a tray, window close requests the shared exit confirmation and keeps the window accessible on cancellation or failure. |
+| D031 | The tray **Close app** action and, without a tray, window close or the visible **Close app** action use the same exit coordinator. With an active session, offer Keep running and close, Finish work and close, or Cancel; Cancel is selected by default. Finish emits exit only after successful persistence; failure leaves the app accessible. |
 | D032 | Keeping a session running after process exit pauses reminders. Reopening calculates elapsed time from persisted timestamps. Finishing through the exit dialog saves the rounded finish and exits. |
 | D033 | Left-clicking the tray icon opens a compact panel showing state, net time, session start, active lunch duration, the valid timer action, Add entry, and Open timesheet. |
 | D034 | The tray context menu contains Open QI Flow, state/net time, the valid timer action, Add entry, Start with Windows, Settings, and Close app. |
 | D035 | Start with Windows is optional and initially disabled. Automatic startup normally remains in the tray; it opens recovery when an unfinished previous-day session exists. Manual launch opens the full window. |
-| D036 | Only one process can use the live database. A second launch focuses the existing QI Flow window. |
+| D036 | Only one process can use the live database. Acquire per-data-directory OS ownership before SQLite initialization and retain it until shutdown. On Windows a native file lock releases on process exit/crash without age, PID, or hostname heuristics; the Qt socket only requests focus. A second launch exits without opening SQLite even when focus delivery fails. |
 | D037 | Every timer action is persisted immediately. A crash or Windows shutdown leaves active timestamps recoverable. |
 | D038 | An unfinished previous-day session must be resolved before starting another. Recovery offers set finish time, delete, continue, or review timesheet; it does not suggest a finish time. |
 | D039 | Windows sleep longer than a configurable threshold, default 30 minutes, requires Include as work, Exclude as break, or Decide later. Decide later permits viewing but disables timer actions. Sleep detection can be disabled. |
@@ -70,7 +71,7 @@ This file records the shared understanding reached during the design interview. 
 | ID | Confirmed decision |
 | --- | --- |
 | D050 | Reminders are configurable and initially enabled: long work after 9 elapsed hours including lunch, and long lunch after 45 minutes. |
-| D051 | Notifications show relevant elapsed and net time and offer Open QI Flow or Remind later with 15, 30, or 60-minute snooze. State-changing Finish/End actions occur inside QI Flow. |
+| D051 | Notifications show relevant elapsed and net time and offer Open QI Flow or Remind later with 15, 30, or 60-minute snooze. Lunch reminder state belongs to that deduction, and work reminder state belongs to that session. An old dialog cannot snooze a replacement timer. State-changing Finish/End actions occur inside QI Flow. |
 
 ## Backups, export, and diagnostics
 
@@ -82,7 +83,7 @@ This file records the shared understanding reached during the design interview. 
 | D063 | CSV export supports the selected week, selected month, or all history. Summary export has one row per day; detailed export separates work sessions, lunches, and deducted breaks. |
 | D064 | CSV is UTF-8 and semicolon-separated, uses `dd/MM/yyyy`, `HH:mm`, and Danish decimal commas, and excludes deleted records and actual unrounded press metadata. |
 | D065 | Live data and settings use the standard private Windows application-data folder. The path is visible in Settings but is not user-movable. |
-| D066 | Keep about seven days of local diagnostic logs, excluding notes and time-entry contents where possible. Settings provides Open log folder. Windows account security protects local data; there is no QI Flow PIN in iteration 1. |
+| D066 | Keep about seven days of local diagnostic logs containing approved application events only. Never store credentials, OAuth callback URLs/codes/state/tokens, notes, or time-entry contents, including dependency request logs and exception payloads. Settings provides Open log folder. Windows account security protects local data; there is no QI Flow PIN in iteration 1. |
 
 ## Appearance and first run
 
@@ -119,6 +120,14 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-10-03: US44 adds explicit overnight endpoint dates and DST occurrence choices, with
+  Save/Discard/Cancel protection. D029 records the revised correction interaction; the original
+  time-only US05/US22 controls remain historical. A15 scopes reminders to each timer identity,
+  including dialogs left open while a timer is replaced.
+- 2026-10-03: Audit remediation began. D066's strict exclusions follow the current agent privacy
+  requirement; diagnostics allow only approved application events with bounded safe fields and
+  omit raw dependency requests, exception contents, and tracebacks. Archived US20 keeps its
+  original criteria and records this stricter audit amendment.
 - 2026-10-03: The user confirmed that every differing Testhuset and DSB row requires an explicit
   Keep or Replace choice before Fill is enabled. D097 and D102 take precedence over archived
   US27's default-to-Replace interaction. US45 records the revised interaction and tests; the

@@ -5,7 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from qi_flow.application.sync_models import SyncConflict
 from qi_flow.domain.models import DeductionId, DeductionKind, IsoWeek, SessionId, WorkLocation
+
+
+@dataclass(frozen=True)
+class SyncStatusView:
+    state: str
+    pending_count: int = 0
+    conflict_count: int = 0
+    problem_count: int = 0
+    last_success: datetime | None = None
+    conflicts: tuple[SyncConflict, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +161,7 @@ class ReminderView:
     kind: str
     elapsed_seconds: int
     net_seconds: int
+    subject_id: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from collections.abc import Callable
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
     QTabBar,
@@ -18,16 +21,23 @@ from PySide6.QtWidgets import (
 )
 
 from qi_flow import __version__
+from qi_flow.application.backups import BackupOperations
+from qi_flow.application.desktop import (
+    ReleaseOperations,
+    RuntimeDirectories,
+    StartupPreferences,
+    TimesheetExporter,
+)
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncSettings
+from qi_flow.application.google_sync_service import SyncResult
+from qi_flow.application.ports import GoogleConnection
+from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.infrastructure.backups import BackupManager
-from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
-from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
-from qi_flow.infrastructure.paths import AppPaths
-from qi_flow.infrastructure.startup import StartupManager
-from qi_flow.infrastructure.updates import ReleaseClient
+from qi_flow.ui.backup_controller import BackupController
+from qi_flow.ui.google_sync_controller import GoogleSyncController
+from qi_flow.ui.runtime_lifecycle import ShutdownGroup
 from qi_flow.ui.settings_page import SettingsPage
 from qi_flow.ui.testhuset_dialog import SheetFactory
 from qi_flow.ui.theme import ThemeManager, logo_path
@@ -38,21 +48,30 @@ from qi_flow.ui.today_page import TodayPage
 class MainWindow(QMainWindow):
     """Stable application shell for feature-owned pages."""
 
+    close_app_requested = Signal()
+    restore_requested = Signal(object)
+    update_install_requested = Signal(object, object)
+
     def __init__(
         self,
         service: TimeTrackingApplicationService | None = None,
-        backups: BackupManager | None = None,
-        exporter: CsvTimesheetExporter | None = None,
-        paths: AppPaths | None = None,
-        startup: StartupManager | None = None,
+        backups: BackupOperations | None = None,
+        exporter: TimesheetExporter | None = None,
+        paths: RuntimeDirectories | None = None,
+        startup: StartupPreferences | None = None,
         testhuset: TesthusetService | None = None,
         sheet_factory: SheetFactory | None = None,
         credentials: TesthusetCredentialStore | None = None,
         dsb: DsbService | None = None,
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
-        google_oauth: GoogleOAuthStore | None = None,
-        releases: ReleaseClient | None = None,
+        google_oauth: GoogleConnection | None = None,
+        releases: ReleaseOperations | None = None,
+        google_controller: GoogleSyncController | None = None,
+        sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
+        sync_actions: GoogleSyncActions | None = None,
+        backup_controller: BackupController | None = None,
+        shutdown: ShutdownGroup | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -62,6 +81,8 @@ class MainWindow(QMainWindow):
         self._theme_manager = ThemeManager(app)
         self._theme_manager.setParent(self)
         self._service = service
+        self._tray_available = True
+        self._exit_approved = False
         self._theme_manager.apply(service.app_preferences().theme if service else "system")
 
         self._navigation = QTabBar()
@@ -102,16 +123,24 @@ class MainWindow(QMainWindow):
                 google_sync,
                 google_oauth,
                 releases,
+                google_controller,
+                sync_command,
+                sync_actions,
+                backup_controller,
+                shutdown,
             )
+            settings_page.restore_requested.connect(self.restore_requested)
+            settings_page.update_install_requested.connect(self.update_install_requested)
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)
         timesheet_page = (
-            TimesheetPage(service, testhuset, sheet_factory, dsb, dsb_sheet_factory)
+            TimesheetPage(service, testhuset, sheet_factory, dsb, dsb_sheet_factory, shutdown)
             if service is not None
             else self._placeholder("Timesheet", "Tracking service is unavailable.")
         )
         if settings_page is not None and isinstance(timesheet_page, TimesheetPage):
             settings_page.dsb_enabled_changed.connect(timesheet_page.refresh_dsb_availability)
+            settings_page.preferences_saved.connect(timesheet_page.refresh)
         self._settings_page = settings_page
         if settings_page is not None:
             settings_page.preferences_saved.connect(self._apply_saved_theme)
@@ -170,6 +199,13 @@ class MainWindow(QMainWindow):
         self._version_label.setObjectName("applicationVersion")
         self._version_label.setProperty("role", "muted")
         self._version_label.setContentsMargins(24, 4, 24, 8)
+        self._close_app_button = QPushButton("Close app")
+        self._close_app_button.clicked.connect(self.close_app_requested.emit)
+        self._close_app_button.hide()
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 20, 0)
+        footer.addWidget(self._version_label, 1)
+        footer.addWidget(self._close_app_button)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -177,7 +213,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         layout.addWidget(navigation_panel)
         layout.addWidget(self._pages, 1)
-        layout.addWidget(self._version_label)
+        layout.addLayout(footer)
         self.setCentralWidget(content)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -245,6 +281,21 @@ class MainWindow(QMainWindow):
         self._navigation.setCurrentIndex(self._page_index["Settings"])
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Hide to tray; explicit process exit is owned by the tray controller."""
+        """Hide to tray, or request the ordinary exit confirmation when no tray exists."""
+        if self._exit_approved:
+            event.accept()
+            return
         event.ignore()
-        self.hide()
+        if self._tray_available:
+            self.hide()
+        else:
+            self.close_app_requested.emit()
+
+    def allow_exit(self) -> None:
+        """Called only after the selected persistence action and worker shutdown succeed."""
+        self._exit_approved = True
+
+    def set_tray_available(self, available: bool) -> None:
+        """Keep the explicit exit action accessible when Windows has no system tray."""
+        self._tray_available = available
+        self._close_app_button.setVisible(not available)

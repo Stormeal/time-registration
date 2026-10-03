@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from qi_flow.domain.errors import InvalidIntervalError
@@ -10,6 +10,13 @@ from qi_flow.domain.models import Deduction, WorkSession
 
 COPENHAGEN = ZoneInfo("Europe/Copenhagen")
 VALID_ROUNDING_MINUTES = frozenset({1, 5, 10, 15})
+
+
+def local_day_bounds(work_date: date) -> tuple[datetime, datetime]:
+    """Return UTC bounds of a Copenhagen date, including 23/25-hour DST days."""
+    start = datetime.combine(work_date, datetime.min.time(), COPENHAGEN)
+    end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), COPENHAGEN)
+    return start.astimezone(UTC), end.astimezone(UTC)
 
 
 def round_to_nearest_interval(value: datetime, minutes: int) -> datetime:
@@ -106,10 +113,8 @@ def split_at_local_midnight(start: datetime, end: datetime) -> list[tuple[dateti
     cursor = start
     while cursor < end:
         local = cursor.astimezone(COPENHAGEN)
-        next_midnight = datetime.combine(
-            local.date() + timedelta(days=1), datetime.min.time(), COPENHAGEN
-        )
-        boundary = min(end, next_midnight.astimezone(UTC))
+        _, next_midnight = local_day_bounds(local.date())
+        boundary = min(end, next_midnight)
         pieces.append((cursor, boundary))
         cursor = boundary
     return pieces

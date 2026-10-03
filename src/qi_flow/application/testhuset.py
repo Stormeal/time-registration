@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from typing import Protocol
 
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
+from qi_flow.application.sync_capture import captured_mutation
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import IsoWeek, SessionId, WorkSession
 from qi_flow.domain.testhuset import ProjectTask, decimal_hours, parse_hours
 from qi_flow.domain.time_rules import COPENHAGEN, split_at_local_midnight
+
+
+class FillDecision(Enum):
+    KEEP = "keep"
+    REPLACE = "replace"
+
+
+FillDecisions = Mapping[int, FillDecision]
 
 
 class TaskCache(Protocol):
@@ -75,6 +85,36 @@ class TesthusetCredentialStore(Protocol):
     def clear(self) -> None: ...
 
 
+def completed_segments(uow: UnitOfWork, week: IsoWeek) -> Iterator[tuple[WorkSession, date, int]]:
+    """Allocate completed net seconds once; destination filtering precedes rounding."""
+    monday = date.fromisocalendar(week.year, week.week, 1)
+    start = datetime.combine(monday, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+    end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), COPENHAGEN).astimezone(
+        UTC
+    )
+    for session in uow.sessions.list_intersecting(
+        start - timedelta(minutes=15), end + timedelta(minutes=15)
+    ):
+        if session.deleted_at is not None or session.is_active:
+            continue
+        left = session.effective_started_at or session.actual_started_at
+        right = session.effective_ended_at or session.actual_ended_at
+        if right is None or left >= end or right <= start:
+            continue
+        deductions = uow.deductions.list_for_session(session.id)
+        for a, b in split_at_local_midnight(max(left, start), min(right, end)):
+            seconds = int((b - a).total_seconds())
+            for deduction in deductions:
+                if deduction.deleted_at is not None:
+                    continue
+                dstart = deduction.effective_started_at or deduction.actual_started_at
+                dend = deduction.effective_ended_at or deduction.actual_ended_at
+                if dend is None:
+                    raise ValueError("Resolve unfinished deductions before filling.")
+                seconds -= max(0, int((min(b, dend) - max(a, dstart)).total_seconds()))
+            yield session, a.astimezone(COPENHAGEN).date(), seconds
+
+
 class TesthusetService:
     __test__ = False
 
@@ -96,6 +136,7 @@ class TesthusetService:
         self.destination = destination
         self._settings_prefix = settings_prefix
         self._assignment_attribute = assignment_attribute
+        self._latest_preview: FillPreview | None = None
 
     def tasks(self) -> tuple[ProjectTask, ...]:
         return self._cache.load()
@@ -113,7 +154,7 @@ class TesthusetService:
     def assign(self, session_id: SessionId, task_id: str | None) -> None:
         if task_id is not None:
             self._require_task(task_id)
-        with self._uow_factory() as uow:
+        with captured_mutation(self._uow_factory, self._identifiers, self._clock.now()) as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise ValueError("Choose a completed work session before assigning a task.")
@@ -122,7 +163,7 @@ class TesthusetService:
     def assign_active(self, session_id: SessionId, task_id: str) -> None:
         """Save a selected task on the currently running work session."""
         self._require_task(task_id)
-        with self._uow_factory() as uow:
+        with captured_mutation(self._uow_factory, self._identifiers, self._clock.now()) as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise ValueError("Choose the active work session before assigning a task.")
@@ -161,10 +202,6 @@ class TesthusetService:
         return tasks
 
     def proposed_slots(self, week: IsoWeek) -> tuple[HourSlot, ...]:
-        monday = date.fromisocalendar(week.year, week.week, 1)
-        start = datetime.combine(monday, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = datetime.combine(monday + timedelta(days=7), datetime.min.time(), COPENHAGEN)
-        end = end.astimezone(UTC)
         tasks = {task.id: task for task in self.tasks()}
         default = self.default_task_id()
         if default not in tasks:
@@ -174,63 +211,43 @@ class TesthusetService:
             )
         totals: dict[tuple[date, str], int] = {}
         with self._uow_factory() as uow:
-            # Include the rounding margin at week boundaries, then clip effective intervals.
-            for session in uow.sessions.list_intersecting(
-                start - timedelta(minutes=15), end + timedelta(minutes=15)
-            ):
-                left = session.effective_started_at or session.actual_started_at
-                right = session.effective_ended_at or session.actual_ended_at
-                # A running session has no stable net duration. It must not block
-                # registration of already completed sessions from earlier days.
-                if right is None:
-                    continue
-                if left >= end or right <= start:
-                    continue
+            for session, day, seconds in completed_segments(uow, week):
                 task_id = getattr(session, self._assignment_attribute) or default
                 if task_id not in tasks:
                     raise ValueError("A session uses a removed task. Choose a current override.")
-                deductions = uow.deductions.list_for_session(session.id)
-                for a, b in split_at_local_midnight(max(left, start), min(right, end)):
-                    seconds = int((b - a).total_seconds())
-                    for deduction in deductions:
-                        if deduction.deleted_at is not None:
-                            continue
-                        dstart = deduction.effective_started_at or deduction.actual_started_at
-                        dend = deduction.effective_ended_at or deduction.actual_ended_at
-                        if dend is None:
-                            raise ValueError("Resolve unfinished deductions before filling.")
-                        seconds -= max(0, int((min(b, dend) - max(a, dstart)).total_seconds()))
-                    key = (a.astimezone(COPENHAGEN).date(), task_id)
-                    totals[key] = totals.get(key, 0) + seconds
+                key = day, task_id
+                totals[key] = totals.get(key, 0) + seconds
         return tuple(
             HourSlot(day, tasks[task_id], decimal_hours(seconds))
             for (day, task_id), seconds in sorted(totals.items())
         )
 
     def preview(self, sheet: WeeklySheet, week: IsoWeek) -> FillPreview:
+        self._latest_preview = None
         self.scan(sheet, week)
+        return self._read_preview(sheet, week)
+
+    def _read_preview(self, sheet: WeeklySheet, week: IsoWeek) -> FillPreview:
+        self._latest_preview = None
         slots = tuple(PreviewSlot(slot, sheet.read(slot)) for slot in self.proposed_slots(week))
         for slot in slots:
             parse_hours(slot.existing)
             parse_hours(slot.proposed.hours)
         if not slots:
             raise ValueError("There is no completed work in the selected week.")
-        return FillPreview(week, slots)
+        preview = FillPreview(week, slots)
+        self._latest_preview = preview
+        return preview
 
     def fill(
         self,
         sheet: WeeklySheet,
         preview: FillPreview,
-        replace: frozenset[int],
+        decisions: FillDecisions,
         *,
         confirmed: bool,
     ) -> FillResult:
-        if not confirmed:
-            raise ValueError(
-                f"Confirm Fill {self.destination} timesheet before changing any hours."
-            )
-        if not replace <= set(range(len(preview.slots))):
-            raise ValueError("Invalid conflict selection.")
+        choices = self._begin_fill(preview, decisions, confirmed=confirmed)
         # Reconcile again before the first write; never apply an obsolete preview.
         self.scan(sheet, preview.week)
         if self.proposed_slots(preview.week) != tuple(s.proposed for s in preview.slots):
@@ -242,7 +259,7 @@ class TesthusetService:
         for index, item in enumerate(preview.slots):
             if item.matches:
                 matched += 1
-            elif index not in replace:
+            elif choices[index] is FillDecision.KEEP:
                 kept += 1
             else:
                 if parse_hours(sheet.read(item.proposed)) != parse_hours(item.existing):
@@ -250,3 +267,27 @@ class TesthusetService:
                 sheet.write_verified(item.proposed)
                 changed += 1
         return FillResult(changed, kept, matched)
+
+    def _begin_fill(
+        self, preview: FillPreview, decisions: FillDecisions, *, confirmed: bool
+    ) -> dict[int, FillDecision]:
+        if not confirmed:
+            raise ValueError(
+                f"Confirm Fill {self.destination} timesheet before changing any hours."
+            )
+        differing = {index for index, item in enumerate(preview.slots) if not item.matches}
+        if not isinstance(decisions, Mapping):
+            raise ValueError("Choose Keep or Replace for every differing slot decision.")
+        choices = dict(decisions)
+        if (
+            set(choices) != differing
+            or any(type(index) is not int for index in choices)
+            or any(not isinstance(value, FillDecision) for value in choices.values())
+        ):
+            raise ValueError("Choose Keep or Replace for every differing slot decision.")
+        if preview is not self._latest_preview:
+            raise ValueError("This review is no longer current. Prepare a new preview.")
+        # Every confirmed attempt needs a fresh review afterwards, even if a save's
+        # outcome is uncertain and the remote value still appears unchanged.
+        self._latest_preview = None
+        return choices

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
+import sqlite3
 from enum import Enum, auto
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -54,9 +54,18 @@ class ExitCoordinator(QObject):
         if choice is ExitChoice.CANCEL:
             return
         if choice is ExitChoice.FINISH_AND_CLOSE:
-            # Defensive only: the option is disabled whenever finishing would be invalid.
-            with suppress(DomainError):
+            try:
                 self._service.finish_work(FinishWorkCommand())
+            except DomainError as error:
+                QMessageBox.warning(self._parent_widget, "Work could not be finished", str(error))
+                return
+            except (sqlite3.Error, OSError):
+                QMessageBox.warning(
+                    self._parent_widget,
+                    "Work could not be finished",
+                    "QI Flow could not save the finish. Keep the app open and retry.",
+                )
+                return
         self.exit_confirmed.emit()
 
     def ask(self, lunch_active: bool) -> ExitChoice:

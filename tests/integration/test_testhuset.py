@@ -12,7 +12,7 @@ from qi_flow.application.dto import (
     ManualWorkSessionCommand,
     StartWorkCommand,
 )
-from qi_flow.application.testhuset import HourSlot, TesthusetService
+from qi_flow.application.testhuset import FillDecision, HourSlot, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import DeductionKind, IsoWeek
 from qi_flow.domain.testhuset import ProjectTask, decimal_hours, parse_hours
@@ -171,7 +171,7 @@ def test_removed_override_blocks_preview_but_active_session_is_excluded(setup) -
     tracking.start_work(StartWorkCommand(stamp(15, 7)))
     preview = service.preview(sheet, WEEK)
     assert [item.proposed.work_date for item in preview.slots] == [date(2026, 9, 14)]
-    result = service.fill(sheet, preview, frozenset({0}), confirmed=True)
+    result = service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
     assert result.changed == 1
     assert [slot.work_date for slot in sheet.writes] == [date(2026, 9, 14)]
 
@@ -185,28 +185,34 @@ def test_confirmation_matching_keep_replace_and_retry(setup) -> None:
     preview = service.preview(sheet, WEEK)
     assert not sheet.writes
     with pytest.raises(ValueError, match="Confirm"):
-        service.fill(sheet, preview, frozenset({2}), confirmed=False)
-    result = service.fill(sheet, preview, frozenset({2}), confirmed=True)
+        service.fill(
+            sheet, preview, {1: FillDecision.KEEP, 2: FillDecision.REPLACE}, confirmed=False
+        )
+    result = service.fill(
+        sheet, preview, {1: FillDecision.KEEP, 2: FillDecision.REPLACE}, confirmed=True
+    )
     assert (result.changed, result.kept, result.matched) == (1, 1, 1)
     assert sheet.writes[0].hours == "8.00"
     assert sheet.values[(date(2026, 9, 15), TASK.id)] == "3,50"
     retry = service.preview(sheet, WEEK)
-    assert service.fill(sheet, retry, frozenset({2}), confirmed=True).changed == 0
+    assert service.fill(sheet, retry, {1: FillDecision.KEEP}, confirmed=True).changed == 0
 
 
-@pytest.mark.parametrize("change", ["remote", "local", "default"])
+@pytest.mark.parametrize("change", ["remote", "local", "default", "assignment"])
 def test_stale_preview_never_writes(setup, change: str) -> None:
     tracking, service, sheet, _, _ = setup
-    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    session = tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
     preview = service.preview(sheet, WEEK)
     if change == "remote":
         sheet.values[(date(2026, 9, 14), TASK.id)] = "2.00"
     elif change == "local":
         tracking.add_manual_session(ManualWorkSessionCommand(stamp(15, 7), stamp(15, 15)))
+    elif change == "assignment":
+        service.assign(session.id, OTHER.id)
     else:
         service.set_default(OTHER.id)
     with pytest.raises(ValueError, match="changed"):
-        service.fill(sheet, preview, frozenset({0}), confirmed=True)
+        service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
     assert not sheet.writes
 
 
@@ -216,21 +222,22 @@ def test_uncertain_save_stops_without_retry(setup) -> None:
     preview = service.preview(sheet, WEEK)
     sheet.fail = True
     with pytest.raises(ValueError, match="Uncertain"):
-        service.fill(sheet, preview, frozenset({0}), confirmed=True)
+        service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
     assert not sheet.writes
 
 
 def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
     tracking, _, _, database, cache = setup
     ids = UuidIdentifierGenerator()
-    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache, testhuset_cache=cache)
+    dsb.set_included_branches({TASK.id})
     sheet = DsbSheet()
     dsb.scan(sheet, WEEK)
     dsb.set_default(TASK.id)
     tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
 
     preview = dsb.preview(sheet, WEEK)
-    result = dsb.fill(sheet, preview, frozenset({0}), confirmed=True)
+    result = dsb.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
 
     assert result.changed == 1
     assert len(sheet.writes) == 1
@@ -241,7 +248,8 @@ def test_dsb_fill_sends_only_a_changed_reviewed_batch(setup) -> None:
 def test_dsb_preview_uses_the_cached_allocation_without_rescanning(setup) -> None:
     tracking, _, _, database, cache = setup
     ids = UuidIdentifierGenerator()
-    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache)
+    dsb = DsbService(lambda: SQLiteUnitOfWork(database), Clock(), ids, cache, testhuset_cache=cache)
+    dsb.set_included_branches({TASK.id})
     sheet = DsbSheet()
     dsb.scan(sheet, WEEK)
     dsb.set_default(TASK.id)
@@ -252,6 +260,36 @@ def test_dsb_preview_uses_the_cached_allocation_without_rescanning(setup) -> Non
 
     assert len(preview.slots) == 1
     assert sheet.weeks == []
+
+
+def test_dsb_filters_before_rounding_and_preserves_testhuset_net_totals(setup):
+    tracking, testhuset, _, database, cache = setup
+    dsb = DsbService(
+        lambda: SQLiteUnitOfWork(database),
+        Clock(),
+        UuidIdentifierGenerator(),
+        cache,
+        testhuset_cache=cache,
+    )
+    dsb.set_default(TASK.id)
+    dsb.set_included_branches({TASK.id})
+    for minute in (0, 5):
+        session = tracking.add_manual_session(
+            ManualWorkSessionCommand(stamp(14, 7, minute), stamp(14, 7, minute + 3))
+        )
+        tracking.add_manual_deduction(
+            ManualDeductionCommand(
+                session.id, DeductionKind.LUNCH, stamp(14, 7, minute + 1), stamp(14, 7, minute + 2)
+            )
+        )
+    excluded = tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 8), stamp(14, 9)))
+    testhuset.assign(excluded.id, OTHER.id)
+    assert dsb.proposed_slots(WEEK) == (HourSlot(date(2026, 9, 14), TASK, "0.07"),)
+    assert [(slot.task.id, slot.hours) for slot in testhuset.proposed_slots(WEEK)] == [
+        (TASK.id, "0.07"),
+        (OTHER.id, "1.00"),
+    ]
+    assert dsb.coverage(WEEK).excluded_seconds == 3600
 
 
 def test_upgrade_preserves_existing_sessions(tmp_path: Path) -> None:
@@ -274,3 +312,89 @@ def test_upgrade_preserves_existing_sessions(tmp_path: Path) -> None:
         saved = uow.sessions.get_active()
         assert saved.id == "existing"
         assert saved.testhuset_task_id is None
+
+
+@pytest.mark.parametrize("existing", ["", "0.00", "2.00"])
+def test_missing_decisions_are_rejected_before_writes(setup, existing):
+    tracking, service, sheet, _, _ = setup
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    sheet.values[(date(2026, 9, 14), TASK.id)] = existing
+    preview = service.preview(sheet, WEEK)
+    with pytest.raises(ValueError, match="decision"):
+        service.fill(sheet, preview, {}, confirmed=True)
+    assert sheet.writes == []
+
+
+@pytest.mark.parametrize("outcome", ["success", "uncertain", "stale"])
+def test_started_fill_consumes_preview_even_if_no_save_is_observed(setup, outcome):
+    tracking, service, sheet, _, _ = setup
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    preview = service.preview(sheet, WEEK)
+    if outcome == "uncertain":
+        sheet.fail = True
+    elif outcome == "stale":
+        sheet.values[(date(2026, 9, 14), TASK.id)] = "2.00"
+    if outcome == "success":
+        service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
+    else:
+        with pytest.raises(ValueError):
+            service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
+    sheet.fail = False
+    sheet.values.clear()
+    observed = list(sheet.writes)
+    with pytest.raises(ValueError, match="new preview"):
+        service.fill(sheet, preview, {0: FillDecision.REPLACE}, confirmed=True)
+    assert sheet.writes == observed
+
+
+def test_preparing_another_preview_invalidates_the_previous_review(setup):
+    tracking, service, sheet, _, _ = setup
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    old = service.preview(sheet, WEEK)
+    service.preview(sheet, WEEK)
+    with pytest.raises(ValueError, match="new preview"):
+        service.fill(sheet, old, {0: FillDecision.REPLACE}, confirmed=True)
+    assert sheet.writes == []
+
+
+@pytest.mark.parametrize(
+    "decisions", [{0: None}, {0: True}, {0: "replace"}, {1: FillDecision.KEEP}]
+)
+def test_invalid_testhuset_decisions_do_not_start_a_fill(setup, decisions):
+    tracking, service, sheet, _, _ = setup
+    tracking.add_manual_session(ManualWorkSessionCommand(stamp(14, 7), stamp(14, 15)))
+    preview = service.preview(sheet, WEEK)
+    with pytest.raises(ValueError, match="decision"):
+        service.fill(sheet, preview, decisions, confirmed=True)
+    assert sheet.writes == []
+
+
+def test_partial_testhuset_save_stops_and_a_new_preview_reconciles_saved_rows(setup):
+    tracking, service, sheet, _, _ = setup
+    for day in (14, 15, 16):
+        tracking.add_manual_session(ManualWorkSessionCommand(stamp(day, 7), stamp(day, 15)))
+    attempts = []
+    original_write = sheet.write_verified
+
+    def write(slot):
+        attempts.append(slot)
+        if len(attempts) == 2:
+            raise ValueError("Uncertain save")
+        original_write(slot)
+
+    sheet.write_verified = write
+    preview = service.preview(sheet, WEEK)
+    choices = {0: FillDecision.REPLACE, 1: FillDecision.REPLACE, 2: FillDecision.REPLACE}
+    with pytest.raises(ValueError, match="Uncertain"):
+        service.fill(sheet, preview, choices, confirmed=True)
+    assert [slot.work_date for slot in attempts] == [date(2026, 9, 14), date(2026, 9, 15)]
+    assert [slot.work_date for slot in sheet.writes] == [date(2026, 9, 14)]
+    with pytest.raises(ValueError, match="new preview"):
+        service.fill(sheet, preview, choices, confirmed=True)
+    assert len(attempts) == 2
+    fresh = service.preview(sheet, WEEK)
+    result = service.fill(
+        sheet, fresh, {1: FillDecision.REPLACE, 2: FillDecision.KEEP}, confirmed=True
+    )
+    assert (result.changed, result.kept, result.matched) == (1, 1, 1)
+    assert [slot.work_date for slot in sheet.writes] == [date(2026, 9, 14), date(2026, 9, 15)]

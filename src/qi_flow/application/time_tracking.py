@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
@@ -30,12 +31,14 @@ from qi_flow.application.dto import (
     WeeklyProgressView,
 )
 from qi_flow.application.ports import Clock, IdentifierGenerator, UnitOfWork
+from qi_flow.application.sync_capture import captured_mutation
 from qi_flow.domain.errors import (
     InvalidIntervalError,
     InvalidStateTransitionError,
     OverlappingIntervalError,
     RecoveryRequiredError,
 )
+from qi_flow.domain.interval_validation import validate_intervals
 from qi_flow.domain.models import (
     DayDetails,
     Deduction,
@@ -53,6 +56,7 @@ from qi_flow.domain.time_rules import (
     began_on_previous_local_day,
     effective_interval,
     effective_work_interval,
+    local_day_bounds,
     net_seconds,
     split_at_local_midnight,
 )
@@ -94,6 +98,15 @@ class TimeTrackingApplicationService:
         self._rounding_minutes = rounding_minutes
         self._undo_action: _UndoAction | None = None
 
+    def _mutation(self, *, finish_grace: bool = False) -> AbstractContextManager[UnitOfWork]:
+        now = self._when(None)
+        return captured_mutation(
+            self._uow_factory,
+            self._identifiers,
+            now,
+            not_before=now + timedelta(seconds=30) if finish_grace else None,
+        )
+
     @property
     def rounding_minutes(self) -> int:
         with self._uow_factory() as uow:
@@ -110,7 +123,7 @@ class TimeTrackingApplicationService:
     def add_manual_session(self, command: ManualWorkSessionCommand) -> WorkSession:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             self._ensure_session_has_no_overlap(uow, start, end)
             session = WorkSession(
                 id=self._identifiers.session_id(),
@@ -130,32 +143,23 @@ class TimeTrackingApplicationService:
     def update_work_session(self, command: UpdateWorkSessionCommand) -> WorkSession:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or session.is_active:
                 raise InvalidStateTransitionError("Choose a completed work session to edit.")
-            self._ensure_session_has_no_overlap(uow, start, end, session.id)
-            deductions = uow.deductions.list_for_session(session.id)
-            if any(
-                deduction.deleted_at is None
-                and (
-                    deduction.actual_started_at < start
-                    or deduction.actual_ended_at is None
-                    or deduction.actual_ended_at > end
-                )
-                for deduction in deductions
-            ):
-                raise InvalidIntervalError(
-                    "The work session must still contain all of its lunches and breaks."
-                )
+            candidate = replace(
+                session,
+                actual_started_at=start,
+                actual_ended_at=end,
+                effective_started_at=start,
+                effective_ended_at=end,
+                source=EntrySource.MANUAL,
+                updated_at=now,
+                revision=session.revision + 1,
+            )
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            session.actual_started_at = start
-            session.actual_ended_at = end
-            session.effective_started_at = start
-            session.effective_ended_at = end
-            session.source = EntrySource.MANUAL
-            session.updated_at = now
-            session.revision += 1
+            session = candidate
             uow.sessions.save(session)
             self._copy_office_context(uow, start, end)
         return session
@@ -167,35 +171,31 @@ class TimeTrackingApplicationService:
         now = self._when(None)
         if start >= now:
             raise InvalidIntervalError("The corrected start time must be before now.")
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None or not session.is_active:
                 raise InvalidStateTransitionError("Choose the running work session to correct.")
             self._ensure_not_blocked(session, now)
-            self._ensure_session_has_no_overlap(uow, start, now, session.id)
-            deductions = uow.deductions.list_for_session(session.id)
-            if any(
-                deduction.deleted_at is None and deduction.actual_started_at < start
-                for deduction in deductions
-            ):
-                raise InvalidIntervalError(
-                    "The work session must still contain all of its lunches and breaks."
-                )
+            candidate = replace(
+                session,
+                actual_started_at=start,
+                effective_started_at=None,
+                effective_ended_at=None,
+                source=EntrySource.MANUAL,
+                rounding_minutes=1,
+                updated_at=now,
+                revision=session.revision + 1,
+            )
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            session.actual_started_at = start
-            session.effective_started_at = None
-            session.effective_ended_at = None
-            session.source = EntrySource.MANUAL
-            session.rounding_minutes = 1
-            session.updated_at = now
-            session.revision += 1
+            session = candidate
             uow.sessions.save(session)
         return session
 
     def add_manual_deduction(self, command: ManualDeductionCommand) -> Deduction:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(command.session_id)
             if session is None or session.deleted_at is not None:
                 raise InvalidStateTransitionError(
@@ -223,7 +223,7 @@ class TimeTrackingApplicationService:
     def update_deduction(self, command: UpdateDeductionCommand) -> Deduction:
         start, end = self._completed_times(command.started_at, command.ended_at)
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(command.deduction_id)
             if deduction is None or deduction.deleted_at is not None or deduction.is_active:
                 raise InvalidStateTransitionError("Choose a completed lunch or break to edit.")
@@ -232,21 +232,25 @@ class TimeTrackingApplicationService:
                 raise InvalidStateTransitionError("The parent work session is unavailable.")
             if session.actual_ended_at is None and not session.is_active:
                 raise InvalidStateTransitionError("The parent work session is unavailable.")
-            self._ensure_deduction_fits(uow, session, start, end, deduction.id)
+            candidate = replace(
+                deduction,
+                actual_started_at=start,
+                actual_ended_at=end,
+                effective_started_at=start,
+                effective_ended_at=end,
+                source=EntrySource.MANUAL,
+                updated_at=now,
+                revision=deduction.revision + 1,
+            )
+            self._validate_candidate(uow, now, deduction=candidate)
             self._record_deduction_audit(uow, deduction, "update", now)
-            deduction.actual_started_at = start
-            deduction.actual_ended_at = end
-            deduction.effective_started_at = start
-            deduction.effective_ended_at = end
-            deduction.source = EntrySource.MANUAL
-            deduction.updated_at = now
-            deduction.revision += 1
+            deduction = candidate
             uow.deductions.save(deduction)
         return deduction
 
     def delete_work_session(self, session_id: SessionId) -> None:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(session_id)
             if session is None or session.deleted_at is not None:
                 raise InvalidStateTransitionError("That work session no longer exists.")
@@ -255,6 +259,7 @@ class TimeTrackingApplicationService:
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             for deduction in uow.deductions.list_for_session(session.id):
                 if deduction.deleted_at is None:
                     self._record_deduction_audit(uow, deduction, "delete", now)
@@ -262,10 +267,12 @@ class TimeTrackingApplicationService:
                     deduction.updated_at = now
                     deduction.revision += 1
                     uow.deductions.save(deduction)
+                    if deduction.kind is DeductionKind.LUNCH:
+                        self._retire_reminder(uow, "lunch", str(deduction.id), now)
 
     def delete_deduction(self, deduction_id: DeductionId) -> None:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(deduction_id)
             if deduction is None or deduction.deleted_at is not None:
                 raise InvalidStateTransitionError("That lunch or break no longer exists.")
@@ -274,49 +281,40 @@ class TimeTrackingApplicationService:
             deduction.updated_at = now
             deduction.revision += 1
             uow.deductions.save(deduction)
+            if deduction.kind is DeductionKind.LUNCH:
+                self._retire_reminder(uow, "lunch", str(deduction.id), now)
 
     def restore_work_session(self, session_id: SessionId) -> WorkSession:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = uow.sessions.get(session_id)
             snapshot = uow.audit.latest("work_session", str(session_id))
             if session is None or snapshot is None:
                 raise InvalidStateTransitionError(
                     "No recoverable work-session version is available."
                 )
+            candidate = replace(session)
+            self._restore_session_snapshot(candidate, snapshot, now)
+            self._validate_candidate(uow, now, session=candidate)
             self._record_session_audit(uow, session, "update", now)
-            self._restore_session_snapshot(session, snapshot, now)
-            if session.is_active and uow.sessions.get_active() not in (None, session):
-                raise InvalidStateTransitionError("Cannot restore a second active work session.")
-            if session.actual_ended_at is not None:
-                self._ensure_session_has_no_overlap(
-                    uow, session.actual_started_at, session.actual_ended_at, session.id
-                )
+            session = candidate
             uow.sessions.save(session)
         return session
 
     def restore_deduction(self, deduction_id: DeductionId) -> Deduction:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             deduction = uow.deductions.get(deduction_id)
             snapshot = uow.audit.latest("deduction", str(deduction_id))
             if deduction is None or snapshot is None:
                 raise InvalidStateTransitionError(
                     "No recoverable lunch or break version is available."
                 )
+            candidate = replace(deduction)
+            self._restore_deduction_snapshot(candidate, snapshot, now)
+            self._validate_candidate(uow, now, deduction=candidate)
             self._record_deduction_audit(uow, deduction, "update", now)
-            self._restore_deduction_snapshot(deduction, snapshot, now)
-            session = uow.sessions.get(deduction.session_id)
-            if session is None or session.deleted_at is not None:
-                raise InvalidStateTransitionError("Restore the parent work session first.")
-            if deduction.actual_ended_at is not None:
-                self._ensure_deduction_fits(
-                    uow,
-                    session,
-                    deduction.actual_started_at,
-                    deduction.actual_ended_at,
-                    deduction.id,
-                )
+            deduction = candidate
             uow.deductions.save(deduction)
         return deduction
 
@@ -359,7 +357,7 @@ class TimeTrackingApplicationService:
     def restore_history_entry(self, audit_id: str) -> WorkSession | Deduction:
         """Restore the exact before-image selected from an entry's recoverable history."""
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             row = uow.audit.get_active(audit_id, now)
             if row is None:
                 raise InvalidStateTransitionError(
@@ -373,31 +371,11 @@ class TimeTrackingApplicationService:
                 session = uow.sessions.get(session_id)
                 if session is None:
                     raise InvalidStateTransitionError("The work session is unavailable.")
+                session_candidate = replace(session)
+                self._restore_session_snapshot(session_candidate, snapshot, now)
+                self._validate_candidate(uow, now, session=session_candidate)
                 self._record_session_audit(uow, session, "update", now)
-                self._restore_session_snapshot(session, snapshot, now)
-                if session.is_active:
-                    active = uow.sessions.get_active()
-                    if active is not None and active.id != session.id:
-                        raise InvalidStateTransitionError("Cannot restore a second active session.")
-                else:
-                    assert session.actual_ended_at is not None
-                    self._ensure_session_has_no_overlap(
-                        uow, session.actual_started_at, session.actual_ended_at, session.id
-                    )
-                for child_deduction in uow.deductions.list_for_session(session.id):
-                    if child_deduction.deleted_at is None and (
-                        child_deduction.actual_started_at < session.actual_started_at
-                        or (
-                            session.actual_ended_at is not None
-                            and (
-                                child_deduction.actual_ended_at is None
-                                or child_deduction.actual_ended_at > session.actual_ended_at
-                            )
-                        )
-                    ):
-                        raise InvalidIntervalError(
-                            "The restored session would not contain its saved breaks."
-                        )
+                session = session_candidate
                 uow.sessions.save(session)
                 return session
             if entity_type == "deduction":
@@ -412,26 +390,17 @@ class TimeTrackingApplicationService:
                     raise InvalidStateTransitionError(
                         "The parent work session is unavailable. Restore it first."
                     )
+                deduction_candidate = replace(deduction)
+                self._restore_deduction_snapshot(deduction_candidate, snapshot, now)
+                self._validate_candidate(uow, now, deduction=deduction_candidate)
                 self._record_deduction_audit(uow, deduction, "update", now)
-                self._restore_deduction_snapshot(deduction, snapshot, now)
-                if deduction.actual_ended_at is not None:
-                    self._ensure_deduction_fits(
-                        uow,
-                        parent_session,
-                        deduction.actual_started_at,
-                        deduction.actual_ended_at,
-                        deduction.id,
-                    )
-                elif uow.deductions.get_active(parent_session.id) not in (None, deduction):
-                    raise InvalidStateTransitionError(
-                        "Another lunch or break is already running in this session."
-                    )
+                deduction = deduction_candidate
                 uow.deductions.save(deduction)
                 return deduction
             raise InvalidStateTransitionError("This history record cannot be restored here.")
 
     def update_day_details(self, command: UpdateDayDetailsCommand) -> DaySummaryView:
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             existing = uow.days.get(command.work_date)
             details = DayDetails(
                 command.work_date,
@@ -457,8 +426,7 @@ class TimeTrackingApplicationService:
 
     def completed_sessions_for_day(self, work_date: date) -> list[WorkSession]:
         """Return completed sessions intersecting a Copenhagen calendar day."""
-        start = datetime.combine(work_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = start + timedelta(days=1)
+        start, end = local_day_bounds(work_date)
         with self._uow_factory() as uow:
             sessions = uow.sessions.list_intersecting(start, end)
         return [session for session in sessions if session.actual_ended_at is not None]
@@ -620,7 +588,7 @@ class TimeTrackingApplicationService:
             uow.settings.save("lunch_reminder_minutes", settings.lunch_minutes, now)
 
     def due_reminders(self) -> list[ReminderView]:
-        """Return each unsnoozed threshold crossing once for the active session."""
+        """Return each unsnoozed threshold crossing once for its active timer."""
         now = self._when(None)
         settings = self.reminder_settings()
         due: list[ReminderView] = []
@@ -638,6 +606,11 @@ class TimeTrackingApplicationService:
             if active_deduction is not None and active_deduction.kind is DeductionKind.LUNCH:
                 candidates.append(("lunch", settings.lunch_minutes * 60, settings.lunch_enabled))
             for kind, threshold, enabled in candidates:
+                subject_id = (
+                    str(active_deduction.id)
+                    if kind == "lunch" and active_deduction is not None
+                    else str(session.id)
+                )
                 duration = (
                     int((now - active_deduction.actual_started_at).total_seconds())
                     if kind == "lunch" and active_deduction is not None
@@ -646,14 +619,15 @@ class TimeTrackingApplicationService:
                 if (
                     not enabled
                     or duration < threshold
-                    or self._reminder_is_suppressed(uow, kind, session.id, now)
+                    or self._reminder_is_suppressed(uow, kind, subject_id, now)
                 ):
                     continue
-                uow.settings.save(f"reminder_notified_{kind}", {"session_id": str(session.id)}, now)
-                due.append(ReminderView(kind, duration, state_net_seconds))
+                subject_key = "deduction_id" if kind == "lunch" else "session_id"
+                uow.settings.save(f"reminder_notified_{kind}", {subject_key: subject_id}, now)
+                due.append(ReminderView(kind, duration, state_net_seconds, subject_id))
         return due
 
-    def snooze_reminder(self, kind: str, minutes: int) -> None:
+    def snooze_reminder(self, kind: str, minutes: int, *, subject_id: str | None = None) -> None:
         if kind not in {"work", "lunch"} or minutes not in {15, 30, 60}:
             raise ValueError("Reminder snooze must be 15, 30, or 60 minutes.")
         now = self._when(None)
@@ -661,10 +635,17 @@ class TimeTrackingApplicationService:
             session = uow.sessions.get_active()
             if session is None:
                 return
+            deduction = uow.deductions.get_active(session.id) if kind == "lunch" else None
+            if kind == "lunch" and (deduction is None or deduction.kind is not DeductionKind.LUNCH):
+                return
+            subject_key = "deduction_id" if kind == "lunch" else "session_id"
+            current_id = str(deduction.id) if deduction is not None else str(session.id)
+            if subject_id is not None and subject_id != current_id:
+                return
             uow.settings.save(
                 f"reminder_snooze_{kind}",
                 {
-                    "session_id": str(session.id),
+                    subject_key: current_id,
                     "until": (now + timedelta(minutes=minutes)).isoformat(),
                 },
                 now,
@@ -672,22 +653,30 @@ class TimeTrackingApplicationService:
             uow.settings.save(f"reminder_notified_{kind}", None, now)
 
     @staticmethod
-    def _reminder_is_suppressed(
-        uow: UnitOfWork, kind: str, session_id: SessionId, now: datetime
-    ) -> bool:
+    def _reminder_is_suppressed(uow: UnitOfWork, kind: str, subject_id: str, now: datetime) -> bool:
+        subject_key = "deduction_id" if kind == "lunch" else "session_id"
         snooze = uow.settings.get(f"reminder_snooze_{kind}")
-        if isinstance(snooze, dict) and snooze.get("session_id") == str(session_id):
+        if isinstance(snooze, dict) and snooze.get(subject_key) == subject_id:
             try:
                 if datetime.fromisoformat(str(snooze["until"])) > now:
                     return True
             except (KeyError, ValueError):
                 pass
         notified = uow.settings.get(f"reminder_notified_{kind}")
-        return isinstance(notified, dict) and notified.get("session_id") == str(session_id)
+        return isinstance(notified, dict) and notified.get(subject_key) == subject_id
+
+    @staticmethod
+    def _retire_reminder(uow: UnitOfWork, kind: str, subject_id: str, now: datetime) -> None:
+        subject_key = "deduction_id" if kind == "lunch" else "session_id"
+        for state in ("snooze", "notified"):
+            key = f"reminder_{state}_{kind}"
+            value = uow.settings.get(key)
+            if isinstance(value, dict) and value.get(subject_key) == subject_id:
+                uow.settings.save(key, None, now)
 
     def _summaries_for_range(self, start_date: date, end_date: date) -> list[DaySummaryView]:
-        start = datetime.combine(start_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
-        end = datetime.combine(end_date, datetime.min.time(), COPENHAGEN).astimezone(UTC)
+        start, _ = local_day_bounds(start_date)
+        end, _ = local_day_bounds(end_date)
         now = self._when(None)
         totals: dict[date, _DayTotal] = {
             current: _DayTotal()
@@ -830,7 +819,7 @@ class TimeTrackingApplicationService:
 
     def resolve_sleep_gap(self, resolution: str) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             value = uow.settings.get("pending_sleep_gap")
             if not isinstance(value, dict):
                 raise InvalidStateTransitionError("There is no sleep interval to resolve.")
@@ -898,7 +887,7 @@ class TimeTrackingApplicationService:
         if start > now:
             raise InvalidIntervalError("The start time cannot be in the future.")
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             self._ensure_no_blocking_session(uow.sessions.get_active(), now)
             self._ensure_session_has_no_overlap(uow, start, now)
             session = WorkSession(
@@ -916,7 +905,7 @@ class TimeTrackingApplicationService:
     def start_work(self, command: StartWorkCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         rounding_minutes = self.rounding_minutes
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             active = uow.sessions.get_active()
             self._ensure_no_blocking_session(active, now)
             session = WorkSession(
@@ -934,12 +923,13 @@ class TimeTrackingApplicationService:
     def finish_work(self, command: FinishWorkCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation(finish_grace=True) as uow:
             session = self._require_active(uow)
             if uow.deductions.get_active(session.id) is not None:
                 raise InvalidStateTransitionError("End lunch before finishing work.")
             self._complete_session(session, now)
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             self._copy_office_context(uow, session.actual_started_at, now)
         self._undo_action = _UndoAction("finish", str(session.id), now)
         return ActiveStateView(None, None, None, None, 0)
@@ -948,7 +938,7 @@ class TimeTrackingApplicationService:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
         rounding_minutes = self.rounding_minutes
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._ensure_not_blocked(session, now)
             if uow.deductions.get_active(session.id) is not None:
@@ -970,7 +960,7 @@ class TimeTrackingApplicationService:
     def finish_deduction(self, command: FinishDeductionCommand) -> ActiveStateView:
         now = self._when(command.occurred_at)
         self._ensure_no_pending_sleep_gap()
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._ensure_not_blocked(session, now)
             deduction = uow.deductions.get_active(session.id)
@@ -992,6 +982,8 @@ class TimeTrackingApplicationService:
             deduction.updated_at = now
             deduction.revision += 1
             uow.deductions.save(deduction)
+            if deduction.kind is DeductionKind.LUNCH:
+                self._retire_reminder(uow, "lunch", str(deduction.id), now)
         self._undo_action = _UndoAction("finish_deduction", str(deduction.id), now)
         return self.active_state(now)
 
@@ -1034,7 +1026,7 @@ class TimeTrackingApplicationService:
         if action is None or now - action.occurred_at > timedelta(seconds=30):
             self._undo_action = None
             raise InvalidStateTransitionError("The 30-second undo period has expired.")
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             if action.kind in {"start_deduction", "finish_deduction"}:
                 deduction = uow.deductions.get(DeductionId(action.session_id))
                 if deduction is None:
@@ -1061,6 +1053,8 @@ class TimeTrackingApplicationService:
                 deduction.updated_at = now
                 deduction.revision += 1
                 uow.deductions.save(deduction)
+                if action.kind == "start_deduction" and deduction.kind is DeductionKind.LUNCH:
+                    self._retire_reminder(uow, "lunch", str(deduction.id), now)
             else:
                 session = uow.sessions.get(SessionId(action.session_id))
                 if session is None:
@@ -1082,12 +1076,14 @@ class TimeTrackingApplicationService:
                 session.updated_at = now
                 session.revision += 1
                 uow.sessions.save(session)
+                if action.kind == "start":
+                    self._retire_reminder(uow, "work", str(session.id), now)
         self._undo_action = None
         return self.active_state(now)
 
     def continue_recovery(self) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             session.recovery_acknowledged_at = now
             session.updated_at = now
@@ -1097,13 +1093,14 @@ class TimeTrackingApplicationService:
 
     def delete_recovery(self) -> ActiveStateView:
         now = self._when(None)
-        with self._uow_factory() as uow:
+        with self._mutation() as uow:
             session = self._require_active(uow)
             self._record_session_audit(uow, session, "delete", now)
             session.deleted_at = now
             session.updated_at = now
             session.revision += 1
             uow.sessions.save(session)
+            self._retire_reminder(uow, "work", str(session.id), now)
             for deduction in uow.deductions.list_for_session(session.id):
                 if deduction.deleted_at is None:
                     self._record_deduction_audit(uow, deduction, "delete", now)
@@ -1111,6 +1108,8 @@ class TimeTrackingApplicationService:
                     deduction.updated_at = now
                     deduction.revision += 1
                     uow.deductions.save(deduction)
+                    if deduction.kind is DeductionKind.LUNCH:
+                        self._retire_reminder(uow, "lunch", str(deduction.id), now)
         return ActiveStateView(None, None, None, None, 0)
 
     def _complete_session(self, session: WorkSession, now: datetime) -> None:
@@ -1148,6 +1147,45 @@ class TimeTrackingApplicationService:
         if end > self._when(None):
             raise InvalidIntervalError("Future time entries are not allowed.")
         return start, end
+
+    @staticmethod
+    def _validate_candidate(
+        uow: UnitOfWork,
+        now: datetime,
+        *,
+        session: WorkSession | None = None,
+        deduction: Deduction | None = None,
+    ) -> None:
+        # Legacy sync may have left independent invalid aggregates. Local correction
+        # must repair one parent at a time while still refusing candidate conflicts.
+        if session is not None:
+            conflicts = {
+                item.id: item
+                for item in uow.sessions.list_intersecting(
+                    session.actual_started_at, session.actual_ended_at or now
+                )
+                if item.id != session.id
+            }
+            if session.is_active:
+                conflicts.update(
+                    (item.id, item)
+                    for item in uow.sessions.list_all()
+                    if item.id != session.id and item.is_active
+                )
+            validate_intervals(
+                [session, *conflicts.values()],
+                uow.deductions.list_for_session(session.id),
+                as_of=now,
+            )
+        elif deduction is not None:
+            parent = uow.sessions.get(deduction.session_id)
+            if parent is None:
+                raise InvalidStateTransitionError("Restore the parent work session first.")
+            siblings = [
+                deduction if item.id == deduction.id else item
+                for item in uow.deductions.list_for_session(parent.id)
+            ]
+            validate_intervals([parent], siblings, as_of=now)
 
     @staticmethod
     def _ensure_session_has_no_overlap(
@@ -1210,6 +1248,18 @@ class TimeTrackingApplicationService:
     def _restore_session_snapshot(
         session: WorkSession, snapshot: dict[str, object], now: datetime
     ) -> None:
+        try:
+            TimeTrackingApplicationService._apply_session_snapshot(session, snapshot, now)
+            session.__post_init__()
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidIntervalError(
+                "The saved work-session version has invalid fields."
+            ) from error
+
+    @staticmethod
+    def _apply_session_snapshot(
+        session: WorkSession, snapshot: dict[str, object], now: datetime
+    ) -> None:
         session.actual_started_at = datetime.fromisoformat(str(snapshot["actual_started_at"]))
         session.actual_ended_at = TimeTrackingApplicationService._optional_time(
             snapshot, "actual_ended_at"
@@ -1235,6 +1285,18 @@ class TimeTrackingApplicationService:
 
     @staticmethod
     def _restore_deduction_snapshot(
+        deduction: Deduction, snapshot: dict[str, object], now: datetime
+    ) -> None:
+        try:
+            TimeTrackingApplicationService._apply_deduction_snapshot(deduction, snapshot, now)
+            deduction.__post_init__()
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidIntervalError(
+                "The saved lunch or break version has invalid fields."
+            ) from error
+
+    @staticmethod
+    def _apply_deduction_snapshot(
         deduction: Deduction, snapshot: dict[str, object], now: datetime
     ) -> None:
         deduction.actual_started_at = datetime.fromisoformat(str(snapshot["actual_started_at"]))

@@ -1,5 +1,6 @@
 """Privacy-safe DSB browser diagnostics."""
 
+from datetime import date
 from threading import Event
 
 import pytest
@@ -11,6 +12,7 @@ from qi_flow.infrastructure.dsb_browser import (
     SSO_POLL_MILLISECONDS,
     allocation_id,
     allocation_name_column,
+    date_heading_matches,
     hour_value_matches,
     is_dsb_portal,
     is_send_confirmation,
@@ -119,3 +121,10 @@ def test_hour_value_matches_accepts_dsb_and_qi_flow_decimal_formats(actual: str)
 def test_hour_value_matches_rejects_invalid_or_different_hours() -> None:
     assert not hour_value_matches("not a number", "10.00")
     assert not hour_value_matches("9,50", "10.00")
+
+
+def test_date_heading_matches_danish_short_month_without_confusing_other_months() -> None:
+    day = date(2026, 9, 14)
+
+    assert date_heading_matches("Mandag 14. sep. 2026", day)
+    assert not date_heading_matches("Mandag 14. okt. 2026", day)

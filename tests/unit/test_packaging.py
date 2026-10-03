@@ -93,6 +93,38 @@ def test_update_package_contains_application_bundle_with_expected_layout(tmp_pat
         }
 
 
+def test_packaged_update_retains_installed_uninstaller_and_separate_user_data(tmp_path) -> None:
+    import hashlib
+    import runpy
+
+    bundle = tmp_path / "bundle" / "QI Flow"
+    bundle.mkdir(parents=True)
+    (bundle / "QI Flow.exe").write_bytes(b"release executable")
+    (bundle / "QI Flow Updater.exe").write_bytes(b"release updater")
+    output = tmp_path / "package"
+    build = runpy.run_path("scripts/build-update-package.py")["main"]
+    assert build(["--bundle-dir", str(bundle), "--output-dir", str(output)]) == 0
+
+    install = tmp_path / "Programs" / "QI Flow"
+    install.mkdir(parents=True)
+    (install / "QI Flow.exe").write_bytes(b"installed executable")
+    (install / "unins000.exe").write_bytes(b"installed uninstaller")
+    (install / "unins000.dat").write_bytes(b"installed uninstall metadata")
+    data = tmp_path / "AppData" / "QI Flow" / "qi-flow.sqlite3"
+    data.parent.mkdir(parents=True)
+    data.write_bytes(b"private user data")
+    archive = output / "QI-Flow-Update.zip"
+    apply_update = runpy.run_path("scripts/update_helper.py")["apply_update"]
+
+    apply_update(archive, install, hashlib.sha256(archive.read_bytes()).hexdigest())
+
+    assert (install / "QI Flow.exe").read_bytes() == b"release executable"
+    assert (install / "QI Flow Updater.exe").read_bytes() == b"release updater"
+    assert (install / "unins000.exe").read_bytes() == b"installed uninstaller"
+    assert (install / "unins000.dat").read_bytes() == b"installed uninstall metadata"
+    assert data.read_bytes() == b"private user data"
+
+
 def test_installer_is_per_user_and_leaves_application_data_on_uninstall() -> None:
     installer = Path("installer/QIFlow.iss").read_text(encoding="utf-8")
 

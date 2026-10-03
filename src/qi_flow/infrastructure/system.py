@@ -26,3 +26,12 @@ class UuidIdentifierGenerator:
 
     def audit_id(self) -> str:
         return str(uuid4())
+
+    def change_id(self) -> str:
+        return str(uuid4())
+
+    def group_id(self) -> str:
+        return str(uuid4())
+
+    def conflict_id(self) -> str:
+        return str(uuid4())

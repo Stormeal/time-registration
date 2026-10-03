@@ -28,6 +28,7 @@ from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.ui.controls import RowHoverTree
 from qi_flow.ui.formatting import format_duration
 from qi_flow.ui.manual_entry_dialog import ManualEntryDialog
+from qi_flow.ui.runtime_lifecycle import ShutdownGroup
 from qi_flow.ui.session_editor_dialog import SessionEditorDialog
 from qi_flow.ui.testhuset_dialog import SheetFactory, TesthusetDialog
 
@@ -54,8 +55,10 @@ class TimesheetPage(QWidget):
         sheet_factory: SheetFactory | None = None,
         dsb: DsbService | None = None,
         dsb_sheet_factory: SheetFactory | None = None,
+        shutdown: ShutdownGroup | None = None,
     ) -> None:
         super().__init__()
+        self._shutdown = shutdown
         self._service = service
         self._testhuset = testhuset
         self._sheet_factory = sheet_factory
@@ -269,7 +272,9 @@ class TimesheetPage(QWidget):
 
     def _open_testhuset(self) -> None:
         if self._selected_week and self._testhuset and self._sheet_factory:
-            dialog = TesthusetDialog(self._testhuset, self._sheet_factory, self._selected_week)
+            dialog = TesthusetDialog(
+                self._testhuset, self._sheet_factory, self._selected_week, shutdown=self._shutdown
+            )
             dialog.exec()
 
     def _open_dsb(self) -> None:
@@ -279,7 +284,9 @@ class TimesheetPage(QWidget):
             and self._dsb_sheet_factory is not None
             and self._dsb.is_enabled()
         ):
-            TesthusetDialog(self._dsb, self._dsb_sheet_factory, self._selected_week).exec()
+            TesthusetDialog(
+                self._dsb, self._dsb_sheet_factory, self._selected_week, shutdown=self._shutdown
+            ).exec()
 
     def refresh_dsb_availability(self) -> None:
         """Show the DSB action only after the user has explicitly opted in."""

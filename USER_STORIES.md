@@ -1,29 +1,36 @@
 # QI Flow — active user stories
 
-Version: 1.4 · Updated: 2026-09-30 · Status: active backlog only
+Version: 1.7 · Updated: 2026-10-04 · Status: active backlog only
 
 Completed stories and their original acceptance criteria are preserved in
 `USER_STORIES_ARCHIVE.md`. This file contains only unfinished work. A story moves to the archive
 after its acceptance criteria pass and any required release smoke check is recorded.
 
+The [4 October backlog review](docs/audits/2026-10-04-resolved-issues.md) checked every active
+story and archived all 18 resolved audit defects. All eight stories below have implemented
+behavior covered by the fresh 672-test quality gate; their remaining work is real release
+verification. US44 is already archived. GitHub has no open issues for this repository.
+
 ## Delivery status
 
 | Status | Stories | Remaining work |
 | --- | --- | --- |
-| In progress | US21 | Per-user installer and uninstall cleanup are implemented; clean-account install, upgrade, and uninstall verification remain. |
-| In progress | US32 | The release pipeline has published assets; this new uninstall-preservation fix still needs a packaged Windows update and rollback smoke test. |
-| In progress | US28 | Complete authorization and synchronization behavior. |
-| In progress | US29 | Completed sessions and deductions merge through the shared sheet; explicit conflict resolution and other record types remain. |
-| In progress | US30 | Live DSB smoke check and release verification. |
-| Not started | US31 | Limit DSB hours to user-approved Testhuset branches. |
+| Awaiting release verification | US21 | Clean-account per-user install, launch, startup, upgrade and uninstall/data choices. |
+| Awaiting release verification | US32 | Packaged Windows update/relaunch, interruption/rollback and uninstall/data preservation. |
+| Awaiting release verification | US28 | Real scratch-workbook authorization/disconnect and packaged connection; preserve unrelated content. |
+| Awaiting release verification | US29 | Real two-client synchronization, uncertain-write recovery, conflicts and deletion/backup recovery. |
+| Awaiting release verification | US30 | Authorized live reviewed DSB fill/Send and packaged destination flow. |
+| Awaiting release verification | US31 | Live reviewed DSB fill confirms only explicitly included Testhuset branches contribute. |
+| Awaiting release verification | US45 | Authorized live Testhuset/DSB explicit-choice fills and packaged destination checks. |
+| Awaiting release verification | US46 | Real all-participant V1 cutover with two isolated clients and preserved workbook/history. |
 
 ## Epic G — Setup, settings, and distribution
 
 ### US21 — Install and upgrade on Windows · P2
 
-Implementation status: **In progress** · uninstall now removes its own optional startup entry;
-the installer retains user data and cleans app-owned runtime files. A clean-account Windows
-install, upgrade, and uninstall smoke test remains.
+Implementation status: **Awaiting release verification** · per-user installation, migration,
+startup ownership and app-owned uninstall cleanup are implemented and covered by automated tests;
+the package dry build passed. Clean-account Windows install, upgrade and uninstall remain.
 
 As a consultant, I want a per-user installer so that I can run QI Flow on permitted Windows machines without administrator rights.
 
@@ -36,9 +43,9 @@ Acceptance criteria:
 
 ### US32 — Update QI Flow in place · P2
 
-Implementation status: **In progress** · verified download, rollback, and preservation of the
-installed uninstall files are implemented. Version 0.2.9 has published assets; this new fix still
-needs a packaged Windows update and rollback smoke test before release.
+Implementation status: **Awaiting release verification** · explicit update confirmation,
+verified download, installed uninstall-file preservation, owned rollback and worker/restart
+coordination pass automated tests. Packaged Windows update/relaunch/rollback remain.
 
 As a QI Flow user, I want to receive and apply verified application updates from inside the app so
 that I do not have to find, download, and run a new installer for every release.
@@ -67,7 +74,10 @@ Acceptance criteria:
 
 ### US28 — Connect a private shared timesheet · P1
 
-Implementation status: **In progress** · Settings validates and saves a Sheet URL and desktop OAuth client ID; authorization and synchronization remain to be implemented.
+Implementation status: **Awaiting release verification** · configuration, cancellable bounded
+browser authorization, manual V2 sync, durable status and diagnostic privacy pass the fresh
+672-test gate. The owned Google worker closes before process ownership is released. Real workbook
+authorization/disconnect and packaged connection acceptance remain.
 
 As a consultant, I want to connect QI Flow to my private Google Sheet so that my work laptop and personal desktop can use the same timesheet safely.
 
@@ -77,12 +87,18 @@ Acceptance criteria:
 - Each machine authorizes directly with Google in a visible browser flow. Refresh tokens are stored only in Windows Credential Manager and can be disconnected from Settings.
 - QI Flow creates and owns dedicated structured sync tabs only; existing workbook tabs, formulas, formatting, and history remain unchanged.
 - Sync can be initiated explicitly, reports its last successful time and actionable failure state, and never submits workplace time registrations.
+- Authorization and sync leave tracking responsive, support cancellation and bounded timeouts,
+  and close their temporary callback server and workers after success, cancellation, or failure.
+- Callback URLs, codes, state, tokens, credentials, notes, and time-entry contents never enter
+  diagnostic logs, including logs emitted by dependencies.
 
 ### US29 — Synchronize records without silent loss · P1
 
-Implementation status: **In progress** · completed work sessions and deductions are merged by
-stable ID and revision. An empty local installation imports remote completed history before it
-writes, so it cannot clear the shared tab.
+Implementation status: **Awaiting release verification** · V1 snapshot writes refuse publication.
+Atomic capture, append/readback, causal reconciliation, conflicts, tombstones, active-state
+protection and scheduling pass the fresh 672-test gate. V2 requires reviewed migration. Opening,
+eligible changes and five-minute checks share one worker; failures retain pending changes with
+backoff. Closing cancels/joins work and preserves pending changes. Real two-client acceptance remains.
 
 As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 
@@ -92,13 +108,25 @@ Acceptance criteria:
 - A completed local change is persisted before any network operation; offline changes remain pending and retry on the next explicit or scheduled sync.
 - Concurrent edits to the same record are presented as a conflict with clear local and remote choices; QI Flow never silently overwrites either value.
 - Active timers remain local until they become completed records; sync never creates a second active timer on another machine.
-- Sync runs at app opening and closing on a best-effort basis, after a local change, and on a bounded periodic schedule while the app is open.
+- Sync runs at app opening, after an eligible local change, and on a bounded periodic schedule
+  while the app is open. Closing starts no new request, cancels and joins current bounded work,
+  and preserves durable pending changes for the next opening, as recorded in `DECISIONS.md`.
+- Local changes and their pending sync records commit atomically. An uncertain publication can be
+  retried after restart without losing changes or creating duplicate logical records.
+- Independent changes remain conflicts even when numeric revisions differ. Deletion markers
+  survive recovery-history expiry, and restoring a backup cannot silently resurrect shared deletions.
+- Imported records obey the same overlap, parent-containment, active-state, and timestamp rules as
+  local edits. Invalid groups remain available for reconciliation without partially changing totals.
+- Deductions are published only with an eligible completed parent. Finish Undo keeps active state
+  local and does not leave a reopened session represented remotely as completed work.
 
 ## Epic K — DSB internal time registration
 
 ### US30 — Review and insert DSB hours · P1
 
-Implementation status: **In progress** · the Timesheet action, allocation default, reviewed per-day fill, and explicit DSB send flow are implemented; a live DSB smoke check remains.
+Implementation status: **Awaiting release verification** · opt-in/default allocation, ISO-week
+review, allocation/date targeting, row-reorder verification, explicit choices and verified Send
+pass automated tests. Authorized live DSB review/fill/Send and packaged verification remain.
 
 As a DSB consultant, I want to review and insert a selected ISO week's completed hours into DSB so that I do not have to re-enter them manually.
 
@@ -113,7 +141,9 @@ Acceptance criteria:
 
 ### US31 — Exclude non-DSB branches from DSB hours · P1
 
-Implementation status: **Not started**.
+Implementation status: **Awaiting release verification** · scanned stable-ID branch selection,
+resolved assignments, included/excluded inspection, empty-selection refusal and stale-review
+invalidation pass the fresh 672-test gate. The live reviewed DSB flow remains under US30.
 
 As a consultant who sometimes works on internal Testhuset activities, I want to choose which
 Testhuset project/task branches count as DSB work so that QI Flow inserts only DSB-related hours
@@ -140,20 +170,91 @@ Acceptance criteria:
   fresh review before **Send**.
 - If no branch is included, QI Flow blocks DSB preview/fill with an actionable explanation.
 
+## Epic R — Audit follow-ups
+
+The [October audit](docs/audits/2026-10-02-application-audit.md) and
+[implementation and test plan](docs/superpowers/plans/2026-10-03-audit-remediation.md) track A01–A18
+against their existing owning stories. A repair does not erase the archived acceptance criteria
+or become complete until its regression and quality gate pass. The following stories cover
+additional interactions or migration capability; their implementations pass automated checks,
+with the real release acceptance listed below still open.
+
+### US45 — Choose each differing external value explicitly · P1
+
+Implementation status: **Awaiting release verification** · explicit choices, application validation,
+matching-row protection, cancellation and uncertainty pass the fresh 672-test gate. Authorized
+live-fill and packaged destination checks remain under US30 and the remediation plan. The user
+confirmed explicit choices on 2026-10-03 for Testhuset and DSB.
+This supersedes archived US27's default-to-Replace interaction; D097 and D102 govern the new flow.
+
+As a consultant, I want to choose Keep or Replace for every differing external row so that filling
+a timesheet cannot replace a value merely because a default was selected for me.
+
+Acceptance criteria:
+
+- Every differing Testhuset or DSB slot starts with no decision, including blank and zero values.
+- Fill remains disabled until every differing slot has an explicit Keep or Replace decision.
+  Matching slots require no decision and are not written.
+- The application boundary rejects an incomplete decision set even if called outside the dialog.
+- Only explicitly replaced, previewed slots are written after confirmation. Kept and unrelated
+  values remain unchanged; changed local mappings or external values require a fresh review.
+- Cancellation performs no writes and closes the temporary browser. An uncertain or partial save
+  stops and requires a fresh review; no automatic retry, week closure, approval, or locking occurs.
+
+### US46 — Upgrade a shared timesheet without losing history · P1
+
+Implementation status: **Awaiting release verification** · guided migration, verified safety
+copies, participant acknowledgements, conflict-preserving seeds, cutover and Settings/worker wiring
+pass the fresh 672-test gate. The real two-client all-participant cutover remains. Authorized with
+the remediation plan on 2026-10-03; required before V2 publication for an existing V1 workbook.
+US29 owns ordinary synchronization and backup reconciliation.
+
+As a consultant using QI Flow on several machines, I want a guided sync-format upgrade so that
+the shared sheet and each machine's local changes survive the upgrade.
+
+Acceptance criteria:
+
+- The upgrade explains that all V1 writers must be paused and upgraded before V2 publication;
+  it does not claim safe simultaneous use with older versions that replace the shared snapshot.
+- The original remote snapshot is preserved in an immutable safety copy, alongside the original
+  sync tab, unrelated workbook tabs, and a verified local safety backup. A declared participant
+  roster and verified snapshot acknowledgements include every participating machine's local
+  history before cutover is marked complete.
+- Identical imported records become one logical seed; different values without proven ancestry
+  are preserved as conflicts rather than selected by numeric revision.
+- Interrupted upgrade and retry retain stable change IDs and do not clear data or duplicate
+  logical records. Completion is recorded durably and verified before automatic sync starts.
+- Unsupported schemas or renewed V1 writes pause publication when detected, with an actionable
+  explanation. Detection cannot fence a running old writer; pausing and upgrading all V1 writers
+  remains a prerequisite.
+- Tests cover empty/new machines, multiple nonempty local snapshots, conflicting deletions,
+  interrupted upgrades, and preservation of existing workbook content.
+
 ## Release acceptance still open
 
 - A clean Windows-account test passes installation and the Start → Lunch → End lunch → Finish → edit → restart → export flow, plus in-place updater success and failure recovery.
-- Recovery tests cover crash, Windows shutdown, previous-day active state, sleep classification, corrupted database, and invalid rounded intervals.
+- Packaged recovery checks cover crash, Windows shutdown, previous-day active state, sleep
+  classification, corrupted database and invalid intervals; automated recovery regressions pass.
+- A disposable Google workbook and two authorized isolated clients pass real synchronization,
+  uncertain-write recovery, conflict, deletion/backup and all-participant V1 migration checks.
 - Testhuset receives a first real-fill and packaged-installer smoke check without automating week closure.
 - DSB receives a live reviewed-fill smoke check without approving or locking the week.
+
+Exact required checks and environments are maintained in the
+[release record](docs/release-checks/2026-10-04-audit-remediation.md#required-real-acceptance).
 
 ## Review status
 
 - Requirements and decision interview: approved.
 - Completed stories: archived in `USER_STORIES_ARCHIVE.md`.
 - US05–US08 (Epic B), US01–US04, US09–US20, US22–US27 and US33–US34 are implemented and verified.
-- US21 and US28–US32 remain in progress or not started as shown above.
+- US21, US28–US32, US45 and US46 await real release verification; none is unimplemented.
 - US35–US40 (Epics M and N) are complete and archived in `USER_STORIES_ARCHIVE.md`.
 - US41 (Epic O, Settings clarity) is complete and archived in `USER_STORIES_ARCHIVE.md`.
 - US42 (Epic P, EazyProject assignment on start) is complete and archived in
   `USER_STORIES_ARCHIVE.md`.
+- US43 (Epic Q, daily action layout and fair start rounding) is complete and archived in
+  `USER_STORIES_ARCHIVE.md`.
+- US44 is complete and archived with its original overnight/DST/editor criteria.
+- A01–A18 are resolved and archived in the linked backlog review. All implementation tasks in
+  the approved remediation plan are complete; its remaining unchecked items are real release gates.

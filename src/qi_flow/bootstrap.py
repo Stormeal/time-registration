@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from importlib.resources import files
 from pathlib import Path
@@ -16,27 +19,43 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from qi_flow import __version__
+from qi_flow.application.backup_schedule import BackupSchedule
+from qi_flow.application.backups import BackupView
+from qi_flow.application.desktop import AvailableUpdate, RestartCommand, UpdateError
 from qi_flow.application.dsb import DsbService
-from qi_flow.application.google_sync import GoogleSyncSettings
+from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
+from qi_flow.application.google_sync_service import (
+    SyncService,
+)
+from qi_flow.application.sync_actions import GoogleSyncActions
+from qi_flow.application.sync_migration import SyncMigration
+from qi_flow.application.sync_models import SyncTarget
+from qi_flow.application.sync_schedule import SyncSchedule
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
 from qi_flow.infrastructure.dsb_browser import temporary_sheet as temporary_dsb_sheet
 from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
+from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.logging import configure_logging
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.single_instance import SingleInstanceGuard
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.startup import START_MINIMIZED_FLAG, create_startup_manager
+from qi_flow.infrastructure.sync_migration_backup import SQLiteMigrationSafety
 from qi_flow.infrastructure.system import SystemClock, UuidIdentifierGenerator
 from qi_flow.infrastructure.testhuset_browser import temporary_sheet
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
+from qi_flow.infrastructure.update_launcher import prepare_update
 from qi_flow.infrastructure.updates import ReleaseClient
+from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.exit_dialog import ExitCoordinator
+from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 from qi_flow.ui.main_window import MainWindow
+from qi_flow.ui.runtime_lifecycle import RuntimeLifecycle, ShutdownGroup
 from qi_flow.ui.tray import TrayController
 
 
@@ -54,7 +73,8 @@ def _resolve_paths(data_root: Path | None) -> AppPaths:
 
 def _guard_key(data_dir: Path) -> str:
     """A short, filesystem/pipe-name-safe key unique to one data directory (D036)."""
-    return hashlib.sha1(str(data_dir).encode("utf-8")).hexdigest()[:16]
+    canonical = os.path.normcase(str(data_dir.resolve()))
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def build_runtime(data_root: Path | None = None) -> RuntimeContext:
@@ -81,8 +101,22 @@ def run(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
 
     log = logging.getLogger(__name__)
-    guard = SingleInstanceGuard(_guard_key(_resolve_paths(None).data_dir))
-    if not guard.try_acquire():
+    try:
+        data_dir = _resolve_paths(None).data_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
+        guard = SingleInstanceGuard(
+            _guard_key(data_dir), lock_path=data_dir / "qi-flow.instance.lock"
+        )
+        owns_database = guard.try_acquire()
+    except OSError:
+        QMessageBox.critical(
+            None,
+            "QI Flow could not start",
+            "QI Flow could not establish exclusive access to its data directory. "
+            "Check that the directory is accessible and writable, then try again.",
+        )
+        return 1
+    if not owns_database:
         log.info("Another QI Flow instance is already running; it was asked to focus itself")
         return 0
 
@@ -118,8 +152,17 @@ def run(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Restore failed", str(restore_error))
             guard.release()
             return 1
-        QProcess.startDetached(sys.executable, sys.argv[1:])
+        # Restoration has completed; the replacement must be able to own the data immediately.
         guard.release()
+        launched, _pid = QProcess.startDetached(sys.executable, sys.argv[1:])
+        if not launched:
+            QMessageBox.critical(
+                None,
+                "QI Flow could not restart",
+                "Your data was restored, but QI Flow could not restart automatically. "
+                "Please open QI Flow again from the Start menu or your shortcut.",
+            )
+            return 1
         return 0
     log.info("QI Flow %s started; data directory initialized", __version__)
 
@@ -132,7 +175,9 @@ def run(argv: list[str] | None = None) -> int:
         lambda: SQLiteUnitOfWork(context.database),
         SystemClock(),
     )
-    backups.ensure_daily_backup()
+    backup_controller = BackupController(
+        backups, BackupSchedule(SystemClock(), backups.destination_identity), app
+    )
     startup_manager = create_startup_manager()
     credentials = WindowsCredentialStore()
     dsb = DsbService(
@@ -140,7 +185,64 @@ def run(argv: list[str] | None = None) -> int:
         SystemClock(),
         UuidIdentifierGenerator(),
         JsonTaskCache(context.paths.data_dir / "dsb-allocations.json"),
+        testhuset_cache=JsonTaskCache(context.paths.data_dir / "testhuset-projects.json"),
     )
+    google_controller = GoogleSyncController(app)
+    google_settings = GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock())
+
+    def configured_client_id() -> str | None:
+        configuration = google_settings.load()
+        return configuration.oauth_client_id if configuration is not None else None
+
+    google_oauth = GoogleOAuthStore(client_id=configured_client_id)
+
+    def sync_factory(
+        configuration: GoogleSyncConfiguration,
+        target: SyncTarget,
+        generation: int,
+        cancelled: Callable[[], bool],
+    ) -> SyncService:
+        return SyncService(
+            lambda: SQLiteUnitOfWork(context.database),
+            GoogleSheetsSync(configuration, google_oauth, target=target, cancelled=cancelled),
+            target,
+            SystemClock(),
+            UuidIdentifierGenerator(),
+            generation=generation,
+        )
+
+    def migration_factory(
+        configuration: GoogleSyncConfiguration, generation: int, cancelled: Callable[[], bool]
+    ) -> SyncMigration:
+        clock = SystemClock()
+        return SyncMigration(
+            lambda: SQLiteUnitOfWork(context.database),
+            GoogleSheetsSync(configuration, google_oauth, cancelled=cancelled),
+            SQLiteMigrationSafety(context.database, context.paths.backup_dir),
+            clock,
+            UuidIdentifierGenerator(),
+            generation=generation,
+            cancelled=cancelled,
+            deadline=clock.now() + timedelta(minutes=2),
+        )
+
+    sync_actions = GoogleSyncActions(
+        lambda: SQLiteUnitOfWork(context.database),
+        google_settings,
+        google_oauth,
+        SystemClock(),
+        sync_factory,
+        migration_factory,
+    )
+    automatic_sync = AutomaticSyncController(
+        sync_actions, google_controller, SyncSchedule(SystemClock()), app
+    )
+    shutdown = ShutdownGroup(app)
+    shutdown.register_controller(google_controller)
+    shutdown.register_controller(backup_controller)
+    shutdown.closing.connect(automatic_sync.begin_shutdown)
+    shutdown.resumed.connect(automatic_sync.resume)
+
     window = MainWindow(
         service,
         backups,
@@ -157,9 +259,13 @@ def run(argv: list[str] | None = None) -> int:
         credentials,
         dsb,
         temporary_dsb_sheet,
-        GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock()),
-        GoogleOAuthStore(),
+        google_settings,
+        google_oauth,
         ReleaseClient(),
+        google_controller,
+        sync_actions=sync_actions,
+        backup_controller=backup_controller,
+        shutdown=shutdown,
     )
     guard.focus_requested.connect(window.reveal)
 
@@ -167,9 +273,62 @@ def run(argv: list[str] | None = None) -> int:
     app.setWindowIcon(icon)
 
     exit_coordinator = ExitCoordinator(service, window)
-    exit_coordinator.exit_confirmed.connect(app.quit)
+    pending_restart: RestartCommand | None = None
 
-    if QSystemTrayIcon.isSystemTrayAvailable():
+    def restore_backup(backup: object) -> None:
+        if not isinstance(backup, BackupView) or service.active_state().session_id is not None:
+            raise ValueError("Finish active work and choose a verified backup before restoring.")
+        backups.restore(backup)
+
+    lifecycle = RuntimeLifecycle(shutdown, restore_backup)
+
+    def freeze_tracking(frozen: bool) -> None:
+        for widget in app.topLevelWidgets():
+            widget.setEnabled(not frozen)
+
+    lifecycle.frozen.connect(freeze_tracking)
+    lifecycle.failed.connect(lambda message: QMessageBox.warning(window, "Restore failed", message))
+
+    def finish_exit(command: object) -> None:
+        nonlocal pending_restart
+        pending_restart = command if isinstance(command, RestartCommand) else None
+        window.allow_exit()
+        app.quit()
+
+    lifecycle.ready_to_quit.connect(finish_exit)
+    exit_coordinator.exit_confirmed.connect(lifecycle.exit)
+
+    def request_restore(backup: object) -> None:
+        if service.active_state().session_id is not None:
+            QMessageBox.warning(window, "Finish work first", "Finish active work before restoring.")
+            return
+        lifecycle.restore(backup, RestartCommand(sys.executable, tuple(sys.argv[1:])))
+
+    def request_update(update: object, archive: object) -> None:
+        if not isinstance(update, AvailableUpdate) or not isinstance(archive, Path):
+            return
+        try:
+            command = prepare_update(
+                update,
+                archive,
+                context.paths.data_dir,
+                Path(sys.executable),
+                QCoreApplication.applicationPid(),
+            )
+        except UpdateError as error:
+            QMessageBox.warning(window, "QI Flow update", str(error))
+            return
+        approval = ExitCoordinator(service, window)
+        approval.exit_confirmed.connect(lambda: lifecycle.exit(command))
+        approval.request_exit()
+
+    window.restore_requested.connect(request_restore)
+    window.update_install_requested.connect(request_update)
+    window.close_app_requested.connect(exit_coordinator.request_exit)
+
+    tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+    window.set_tray_available(tray_available)
+    if tray_available:
         tray = TrayController(icon, service, startup_manager)
         tray.open_requested.connect(window.reveal)
         tray.open_timesheet_requested.connect(window.show_timesheet)
@@ -198,9 +357,24 @@ def run(argv: list[str] | None = None) -> int:
             "setup.",
         )
     exit_code = app.exec()
+    shutdown.wait_for_shutdown()
     if tray is not None:
         tray.hide()
     guard.release()
+    if pending_restart is not None:
+        launched, _pid = QProcess.startDetached(
+            pending_restart.program,
+            list(pending_restart.arguments),
+            pending_restart.working_directory,
+        )
+        if not launched:
+            QMessageBox.critical(
+                None,
+                "QI Flow could not restart",
+                "QI Flow closed safely, but its replacement could not be started. "
+                "Open QI Flow from your shortcut and retry if needed.",
+            )
+            return 1
     log.info("QI Flow stopped with exit code %d", exit_code)
     _ = context  # Keep runtime-owned adapters alive for the event-loop lifetime.
     return exit_code

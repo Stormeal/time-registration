@@ -9,7 +9,6 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtSvg import QSvgRenderer
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "qi_flow" / "assets" / "qiflow-icon.svg"
 TARGET = ROOT / "src" / "qi_flow" / "assets"

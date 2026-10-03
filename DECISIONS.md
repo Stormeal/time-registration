@@ -10,7 +10,7 @@ This file records the shared understanding reached during the design interview. 
 | --- | --- |
 | D001 | The application is named **QI Flow**. |
 | D002 | Iteration 1 is a local Windows application built with Python, PySide6, and SQLite. |
-| D003 | Google Sheets synchronization, cross-machine behavior, Testhuset, SAP, authentication, and workplace submission are deferred. |
+| D003 | These integrations were deferred during the original local-only iteration. Later decisions authorize optional Google Sheets, Testhuset and DSB browser integration; SAP remains deferred. |
 | D004 | The application installs for the current Windows user without requiring administrator rights. Uninstall removes the optional Start with Windows entry only when it still points to that installation; user data remains. |
 | D005 | QI Flow has no telemetry. Verified application updates may be checked and applied from within QI Flow without requiring the user to manually download and run the installer for each release. Updates must preserve user data and the installed Windows uninstaller, require no administrator rights, and provide a safe recovery path if application-file replacement fails. The installer remains available for first installation and recovery. |
 
@@ -38,18 +38,19 @@ This file records the shared understanding reached during the design interview. 
 | D026 | Overlapping work sessions, lunches or breaks outside their parent session, end-before-start, and multiple open intervals are blocked. Only timer actions create open intervals. |
 | D027 | Timer actions offer Undo for 30 seconds. Deleted records and previous edited values remain recoverable for 30 days. Completed time data otherwise remains indefinitely. |
 | D028 | Form edits require Save. Closing a form with unsaved changes asks whether to discard them. |
+| D029 | Manual entry and session correction show independent endpoint dates and exact-minute Copenhagen times. Any intersected day opens the same overnight session. Nonexistent spring times are refused; repeated autumn times require an occurrence choice. Dirty row changes and close offer Save, Discard, and Cancel; failed Save or Cancel retains the draft and selection. |
 
 ## Tray, startup, and recovery
 
 | ID | Confirmed decision |
 | --- | --- |
-| D030 | Closing the main window minimizes QI Flow to the tray and does not affect the current session. |
-| D031 | The process exits only through **Close app** in the tray context menu. With an active session, offer Keep running and close, Finish work and close, or Cancel; Cancel is selected by default. |
+| D030 | With a system tray, closing the main window minimizes QI Flow to the tray and does not affect the current session. Without a tray, window close requests the shared exit confirmation and keeps the window accessible on cancellation or failure. |
+| D031 | The tray **Close app** action and, without a tray, window close or the visible **Close app** action use the same exit coordinator. With an active session, offer Keep running and close, Finish work and close, or Cancel; Cancel is selected by default. Finish emits exit only after successful persistence; failure leaves the app accessible. |
 | D032 | Keeping a session running after process exit pauses reminders. Reopening calculates elapsed time from persisted timestamps. Finishing through the exit dialog saves the rounded finish and exits. |
 | D033 | Left-clicking the tray icon opens a compact panel showing state, net time, session start, active lunch duration, the valid timer action, Add entry, and Open timesheet. |
 | D034 | The tray context menu contains Open QI Flow, state/net time, the valid timer action, Add entry, Start with Windows, Settings, and Close app. |
 | D035 | Start with Windows is optional and initially disabled. Automatic startup normally remains in the tray; it opens recovery when an unfinished previous-day session exists. Manual launch opens the full window. |
-| D036 | Only one process can use the live database. A second launch focuses the existing QI Flow window. |
+| D036 | Only one process can use the live database. Acquire per-data-directory OS ownership before SQLite initialization and retain it until shutdown. On Windows a native file lock releases on process exit/crash without age, PID, or hostname heuristics; the Qt socket only requests focus. A second launch exits without opening SQLite even when focus delivery fails. |
 | D037 | Every timer action is persisted immediately. A crash or Windows shutdown leaves active timestamps recoverable. |
 | D038 | An unfinished previous-day session must be resolved before starting another. Recovery offers set finish time, delete, continue, or review timesheet; it does not suggest a finish time. |
 | D039 | Windows sleep longer than a configurable threshold, default 30 minutes, requires Include as work, Exclude as break, or Decide later. Decide later permits viewing but disables timer actions. Sleep detection can be disabled. |
@@ -70,7 +71,7 @@ This file records the shared understanding reached during the design interview. 
 | ID | Confirmed decision |
 | --- | --- |
 | D050 | Reminders are configurable and initially enabled: long work after 9 elapsed hours including lunch, and long lunch after 45 minutes. |
-| D051 | Notifications show relevant elapsed and net time and offer Open QI Flow or Remind later with 15, 30, or 60-minute snooze. State-changing Finish/End actions occur inside QI Flow. |
+| D051 | Notifications show relevant elapsed and net time and offer Open QI Flow or Remind later with 15, 30, or 60-minute snooze. Lunch reminder state belongs to that deduction, and work reminder state belongs to that session. An old dialog cannot snooze a replacement timer. State-changing Finish/End actions occur inside QI Flow. |
 
 ## Backups, export, and diagnostics
 
@@ -82,7 +83,7 @@ This file records the shared understanding reached during the design interview. 
 | D063 | CSV export supports the selected week, selected month, or all history. Summary export has one row per day; detailed export separates work sessions, lunches, and deducted breaks. |
 | D064 | CSV is UTF-8 and semicolon-separated, uses `dd/MM/yyyy`, `HH:mm`, and Danish decimal commas, and excludes deleted records and actual unrounded press metadata. |
 | D065 | Live data and settings use the standard private Windows application-data folder. The path is visible in Settings but is not user-movable. |
-| D066 | Keep about seven days of local diagnostic logs, excluding notes and time-entry contents where possible. Settings provides Open log folder. Windows account security protects local data; there is no QI Flow PIN in iteration 1. |
+| D066 | Keep about seven days of local diagnostic logs containing approved application events only. Never store credentials, OAuth callback URLs/codes/state/tokens, notes, or time-entry contents, including dependency request logs and exception payloads. Settings provides Open log folder. Windows account security protects local data; there is no QI Flow PIN in iteration 1. |
 
 ## Appearance and first run
 
@@ -119,6 +120,35 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-10-04: Approved audit implementation uses an immutable causal V2 sync log and atomic local
+  outbox. V1 snapshot writes refuse publication; verified migration requires every declared
+  participant, preserves V1 and local safety copies, and exposes divergent histories. Completed
+  records publish after Undo grace; active aggregates remain local. Explicit conflict commands
+  validate the complete candidate. Closing starts no new sync job: bounded requests cannot meet
+  the five-second best-effort close budget, so current work is cancelled/joined and durable pending
+  changes retry on opening. A changed acknowledged migration history requires a fresh reviewed
+  migration into a new private Sheet; in-place acknowledgement supersession is unsupported.
+- 2026-10-04: Exit, restore and update restart use one owned-worker shutdown barrier. Restore
+  replaces SQLite while process ownership is held; bootstrap launches a replacement only after
+  all workers join and the lock is released. Failed restore resumes tracking. Daily backups run
+  off the UI thread with captured Copenhagen date/destination, atomic staging and failure retries.
+  Cached backup catalogs contain only derived file validity and are not trusted for restoration.
+- 2026-10-04: Architecture and CI checks cover nested dependency boundaries, pinned Windows build
+  dependencies and an independent core test environment without Qt or external integration
+  packages. These automated gates do not replace clean-account or live integration acceptance.
+
+- 2026-10-03: US44 adds explicit overnight endpoint dates and DST occurrence choices, with
+  Save/Discard/Cancel protection. D029 records the revised correction interaction; the original
+  time-only US05/US22 controls remain historical. A15 scopes reminders to each timer identity,
+  including dialogs left open while a timer is replaced.
+- 2026-10-03: Audit remediation began. D066's strict exclusions follow the current agent privacy
+  requirement; diagnostics allow only approved application events with bounded safe fields and
+  omit raw dependency requests, exception contents, and tracebacks. Archived US20 keeps its
+  original criteria and records this stricter audit amendment.
+- 2026-10-03: The user confirmed that every differing Testhuset and DSB row requires an explicit
+  Keep or Replace choice before Fill is enabled. D097 and D102 take precedence over archived
+  US27's default-to-Replace interaction. US45 records the revised interaction and tests; the
+  archived story remains unchanged as historical documentation.
 - 2026-10-02: Epic G updater staging now retains the installed Inno uninstall files before
   replacing application files and refuses an installation lacking them. New installers remove the
   optional startup value on uninstall only if it still points to the same installation, and clean

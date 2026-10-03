@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
 from typing import Self
@@ -13,8 +14,23 @@ from qi_flow.application.ports import (
     DayDetailsRepository,
     DeductionRepository,
     SettingsRepository,
+    SyncRepository,
     WeeklyTargetRepository,
     WorkSessionRepository,
+)
+from qi_flow.application.sync_models import (
+    EntityKey,
+    SyncChange,
+    SyncConflict,
+    SyncContentError,
+    SyncProblem,
+    SyncPublication,
+    SyncReviewError,
+    SyncTarget,
+    canonical_json,
+    freeze_json,
+    utc_instant,
+    validate_group,
 )
 from qi_flow.domain.models import (
     DayDetails,
@@ -218,6 +234,11 @@ class SQLiteDayDetailsRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def delete(self, work_date: date) -> None:
+        self._connection.execute(
+            "DELETE FROM day_details WHERE work_date=?", (work_date.isoformat(),)
+        )
+
     def get(self, work_date: date) -> DayDetails | None:
         row = self._connection.execute(
             "SELECT * FROM day_details WHERE work_date=?", (work_date.isoformat(),)
@@ -360,6 +381,283 @@ class SQLiteWeeklyTargetRepository:
         )
 
 
+class SQLiteSyncRepository:
+    """An immutable target namespace on the caller's existing SQLite transaction.
+
+    Observations include local changes; only explicit enqueue authors an outbox row.
+    Corrupt observations retain both the first content and a quarantined incoming variant.
+    The caller must commit that evidence, then report the problem outside the transaction.
+    """
+
+    def __init__(self, connection: sqlite3.Connection, target: SyncTarget) -> None:
+        self._connection = connection
+        self._namespace = (target.spreadsheet_id, target.log_id)
+
+    def pending(self) -> tuple[SyncChange, ...]:
+        rows = self._connection.execute(
+            """SELECT c.canonical_json FROM sync_changes c
+            JOIN sync_outbox o USING (spreadsheet_id, log_id, change_id)
+            LEFT JOIN sync_acknowledgements a USING (spreadsheet_id, log_id, change_id)
+            WHERE c.spreadsheet_id=? AND c.log_id=? AND a.change_id IS NULL
+            ORDER BY o.rowid""",
+            self._namespace,
+        )
+        return tuple(SyncChange.from_json(row[0]) for row in rows)
+
+    def observed(self) -> tuple[SyncChange, ...]:
+        rows = self._connection.execute(
+            """SELECT canonical_json FROM sync_changes
+            WHERE spreadsheet_id=? AND log_id=? ORDER BY rowid""",
+            self._namespace,
+        )
+        return tuple(SyncChange.from_json(row[0]) for row in rows)
+
+    def _stored(self, change_id: str) -> str | None:
+        row = self._connection.execute(
+            """SELECT canonical_json FROM sync_changes
+            WHERE spreadsheet_id=? AND log_id=? AND change_id=?""",
+            (*self._namespace, change_id),
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    @staticmethod
+    def _complete_groups(changes: Sequence[SyncChange]) -> None:
+        groups: dict[str, list[SyncChange]] = {}
+        for change in changes:
+            groups.setdefault(change.group_id, []).append(change)
+        for group in groups.values():
+            validate_group(group)
+
+    def enqueue(self, changes: Sequence[SyncChange]) -> None:
+        # Validate the entire batch before inserting any row, including when the caller
+        # catches a domain refusal and continues using the surrounding transaction.
+        unique: dict[str, SyncChange] = {}
+        for change in changes:
+            previous = unique.get(change.change_id)
+            content = change.canonical_json()
+            stored = self._stored(change.change_id)
+            if (previous is not None and previous.canonical_json() != content) or (
+                stored is not None and stored != content
+            ):
+                raise SyncContentError("A sync change ID already has different content.")
+            unique[change.change_id] = change
+        self._complete_groups(tuple(unique.values()))
+        envelopes = {change.group_id: change for change in unique.values()}
+        for stored_change in self.observed():
+            envelope = envelopes.get(stored_change.group_id)
+            if envelope is not None and (
+                stored_change.group_members != envelope.group_members
+                or stored_change.group_digest != envelope.group_digest
+                or stored_change.aggregate_base_heads != envelope.aggregate_base_heads
+            ):
+                raise SyncContentError("A sync group ID already has a different commit envelope.")
+        for change in unique.values():
+            self._insert_change(change)
+            self._connection.execute(
+                """INSERT OR IGNORE INTO sync_outbox(spreadsheet_id, log_id, change_id)
+                VALUES (?, ?, ?)""",
+                (*self._namespace, change.change_id),
+            )
+
+    def _insert_change(self, change: SyncChange) -> None:
+        self._connection.execute(
+            """INSERT OR IGNORE INTO sync_changes
+            (spreadsheet_id, log_id, change_id, canonical_json) VALUES (?, ?, ?, ?)""",
+            (*self._namespace, change.change_id, change.canonical_json()),
+        )
+
+    def observe(self, changes: Sequence[SyncChange]) -> None:
+        for change in changes:
+            stored = self._stored(change.change_id)
+            if stored is not None and stored != change.canonical_json():
+                self.record_problem(
+                    SyncProblem(
+                        "duplicate-content:" + change.content_digest(),
+                        "duplicate_change_id",
+                        change.to_record(),
+                        "change:" + change.change_id,
+                    )
+                )
+            else:
+                self._insert_change(change)
+
+    def acknowledge(self, change_ids: Sequence[str]) -> None:
+        if self.problems():
+            raise SyncContentError("Resolve quarantined sync data before acknowledging changes.")
+        changes: list[SyncChange] = []
+        for change_id in dict.fromkeys(change_ids):
+            # A remote observation cannot become a publication acknowledgement.
+            self.publication(change_id)
+            stored = self._stored(change_id)
+            assert stored is not None  # outbox foreign key guarantees this
+            changes.append(SyncChange.from_json(stored))
+        self._complete_groups(changes)
+        selected_groups = {change.group_id for change in changes}
+        self._complete_groups(
+            tuple(change for change in self.observed() if change.group_id in selected_groups)
+        )
+        self._connection.executemany(
+            """INSERT OR IGNORE INTO sync_acknowledgements(spreadsheet_id, log_id, change_id)
+            VALUES (?, ?, ?)""",
+            [(*self._namespace, change.change_id) for change in changes],
+        )
+
+    def heads(self, entity_key: EntityKey) -> tuple[str, ...]:
+        row = self._connection.execute(
+            """SELECT head_ids_json FROM sync_heads
+            WHERE spreadsheet_id=? AND log_id=? AND entity_kind=? AND entity_id=?""",
+            (*self._namespace, *entity_key),
+        ).fetchone()
+        return tuple(json.loads(row[0])) if row is not None else ()
+
+    def set_heads(self, entity_key: EntityKey, head_ids: Sequence[str]) -> None:
+        heads = tuple(sorted(set(head_ids)))
+        for head_id in heads:
+            content = self._stored(head_id)
+            if content is None or SyncChange.from_json(content).entity_key != entity_key:
+                raise ValueError("Materialized heads must reference known changes of this entity.")
+        self._connection.execute(
+            """INSERT INTO sync_heads
+            (spreadsheet_id, log_id, entity_kind, entity_id, head_ids_json) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(spreadsheet_id, log_id, entity_kind, entity_id)
+            DO UPDATE SET head_ids_json=excluded.head_ids_json""",
+            (*self._namespace, *entity_key, canonical_json(heads)),
+        )
+
+    def publication(self, change_id: str) -> SyncPublication:
+        row = self._connection.execute(
+            """SELECT not_before_utc, attempted FROM sync_outbox
+            WHERE spreadsheet_id=? AND log_id=? AND change_id=?""",
+            (*self._namespace, change_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Publication metadata requires a locally enqueued change.")
+        return SyncPublication(_read_stamp(row[0]), bool(row[1]))
+
+    def _pending_ids(self, change_ids: Sequence[str]) -> tuple[str, ...]:
+        identifiers = tuple(dict.fromkeys(change_ids))
+        pending = {change.change_id for change in self.pending()}
+        if not set(identifiers) <= pending:
+            raise ValueError("Publication state requires pending local change IDs.")
+        return identifiers
+
+    def defer(self, change_ids: Sequence[str], not_before: datetime) -> None:
+        stamp = utc_instant(not_before).isoformat()
+        identifiers = self._pending_ids(change_ids)
+        if any(self.publication(change_id).attempted for change_id in identifiers):
+            raise ValueError("An attempted publication cannot be treated as unpublished.")
+        self._connection.executemany(
+            """UPDATE sync_outbox SET not_before_utc=?
+            WHERE spreadsheet_id=? AND log_id=? AND change_id=?""",
+            [(stamp, *self._namespace, change_id) for change_id in identifiers],
+        )
+
+    def mark_attempted(self, change_ids: Sequence[str]) -> None:
+        identifiers = self._pending_ids(change_ids)
+        self._connection.executemany(
+            """UPDATE sync_outbox SET attempted=1
+            WHERE spreadsheet_id=? AND log_id=? AND change_id=?""",
+            [(*self._namespace, change_id) for change_id in identifiers],
+        )
+
+    @staticmethod
+    def _conflict_json(conflict: SyncConflict) -> str:
+        return canonical_json(
+            {
+                "conflict_id": conflict.conflict_id,
+                "entity_keys": conflict.entity_keys,
+                "changes": [change.to_record() for change in conflict.changes],
+                "reason": conflict.reason,
+            }
+        )
+
+    @staticmethod
+    def _read_conflict(content: str) -> SyncConflict:
+        record = json.loads(content)
+        return SyncConflict(
+            record["conflict_id"],
+            tuple(tuple(key) for key in record["entity_keys"]),
+            tuple(SyncChange.from_json(canonical_json(change)) for change in record["changes"]),
+            record["reason"],
+        )
+
+    def save_conflict(self, conflict: SyncConflict) -> None:
+        self._connection.execute(
+            """INSERT INTO sync_conflicts(spreadsheet_id, log_id, conflict_id, content_json)
+            VALUES (?, ?, ?, ?) ON CONFLICT(spreadsheet_id, log_id, conflict_id)
+            DO UPDATE SET content_json=excluded.content_json, closed=0
+            WHERE sync_conflicts.content_json != excluded.content_json""",
+            (*self._namespace, conflict.conflict_id, self._conflict_json(conflict)),
+        )
+
+    def close_conflict(self, conflict_id: str, reviewed_head_ids: frozenset[str]) -> None:
+        row = self._connection.execute(
+            """SELECT content_json FROM sync_conflicts
+            WHERE spreadsheet_id=? AND log_id=? AND conflict_id=? AND closed=0""",
+            (*self._namespace, conflict_id),
+        ).fetchone()
+        if row is None or self._read_conflict(row[0]).head_ids != reviewed_head_ids:
+            raise SyncReviewError("Conflict changed; review every current head before resolving.")
+        self._connection.execute(
+            """UPDATE sync_conflicts SET closed=1
+            WHERE spreadsheet_id=? AND log_id=? AND conflict_id=?""",
+            (*self._namespace, conflict_id),
+        )
+
+    def conflicts(self) -> tuple[SyncConflict, ...]:
+        rows = self._connection.execute(
+            """SELECT content_json FROM sync_conflicts
+            WHERE spreadsheet_id=? AND log_id=? AND closed=0 ORDER BY rowid""",
+            self._namespace,
+        )
+        return tuple(self._read_conflict(row[0]) for row in rows)
+
+    def get_state(self, key: str) -> object:
+        row = self._connection.execute(
+            "SELECT value_json FROM sync_state WHERE spreadsheet_id=? AND log_id=? AND key=?",
+            (*self._namespace, key),
+        ).fetchone()
+        return freeze_json(json.loads(row[0])) if row is not None else None
+
+    def set_state(self, key: str, value: object) -> None:
+        self._connection.execute(
+            """INSERT INTO sync_state(spreadsheet_id, log_id, key, value_json) VALUES (?, ?, ?, ?)
+            ON CONFLICT(spreadsheet_id, log_id, key)
+            DO UPDATE SET value_json=excluded.value_json""",
+            (*self._namespace, key, canonical_json(value)),
+        )
+
+    def record_problem(self, problem: SyncProblem) -> None:
+        content = canonical_json(
+            {
+                "problem_id": problem.problem_id,
+                "reason": problem.reason,
+                "raw": problem.raw,
+                "source": problem.source,
+            }
+        )
+        existing = self._connection.execute(
+            """SELECT content_json FROM sync_problems
+            WHERE spreadsheet_id=? AND log_id=? AND problem_id=?""",
+            (*self._namespace, problem.problem_id),
+        ).fetchone()
+        if existing is not None and existing[0] != content:
+            raise SyncContentError("A sync problem ID already has different content.")
+        self._connection.execute(
+            """INSERT OR IGNORE INTO sync_problems
+            (spreadsheet_id, log_id, problem_id, content_json) VALUES (?, ?, ?, ?)""",
+            (*self._namespace, problem.problem_id, content),
+        )
+
+    def problems(self) -> tuple[SyncProblem, ...]:
+        rows = self._connection.execute(
+            """SELECT content_json FROM sync_problems
+            WHERE spreadsheet_id=? AND log_id=? ORDER BY rowid""",
+            self._namespace,
+        )
+        return tuple(SyncProblem(**json.loads(row[0])) for row in rows)
+
+
 class SQLiteUnitOfWork:
     """A short-lived, explicit SQLite transaction exposing repository adapters."""
 
@@ -392,11 +690,19 @@ class SQLiteUnitOfWork:
         traceback: TracebackType | None,
     ) -> None:
         if self._connection is not None:
-            if exc_type is None:
-                self._connection.commit()
-            else:
-                self._connection.rollback()
-            self._connection.close()
+            try:
+                if exc_type is None:
+                    self._connection.commit()
+                else:
+                    self._connection.rollback()
+            finally:
+                # Close also rolls back a rejected commit and releases its write lock.
+                self._connection.close()
+
+    def sync_for(self, target: SyncTarget) -> SyncRepository:
+        if self._connection is None:
+            raise RuntimeError("Sync repositories require an open unit of work.")
+        return SQLiteSyncRepository(self._connection, target)
 
     def commit(self) -> None:
         # The context manager owns the final commit, keeping exception rollback reliable.

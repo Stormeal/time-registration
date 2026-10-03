@@ -22,12 +22,20 @@ from qi_flow.application.dto import (
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import (
+    DomainError,
     InvalidIntervalError,
     InvalidStateTransitionError,
     OverlappingIntervalError,
     RecoveryRequiredError,
 )
-from qi_flow.domain.models import DeductionId, DeductionKind, IsoWeek, SessionId, WorkLocation
+from qi_flow.domain.models import (
+    Deduction,
+    DeductionId,
+    DeductionKind,
+    IsoWeek,
+    SessionId,
+    WorkLocation,
+)
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 
@@ -331,6 +339,236 @@ def test_history_restores_deleted_session_and_child_deduction_separately(tmp_pat
     assert [item.id for item in service.completed_deductions(session.id)] == [deduction.id]
 
 
+@pytest.mark.parametrize("selected_history", [False, True])
+def test_restore_open_lunch_requires_active_parent(tmp_path: Path, selected_history: bool) -> None:
+    service, clock, database = build_service(tmp_path, datetime(2026, 9, 15, 8, 0, tzinfo=UTC))
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(minutes=30)
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=30)
+    service.delete_work_session(SessionId("session-1"))
+    history = service.entry_history_for_day(date(2026, 9, 15))
+    work_version = next(item for item in history if item.entity_type == "work_session")
+    lunch_version = next(item for item in history if item.entity_type == "deduction")
+    service.restore_history_entry(work_version.audit_id)
+    clock.value += timedelta(hours=1)
+    service.finish_work(FinishWorkCommand())
+    with SQLiteUnitOfWork(database) as uow:
+        before = (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        )
+
+    with pytest.raises(DomainError):
+        if selected_history:
+            service.restore_history_entry(lunch_version.audit_id)
+        else:
+            service.restore_deduction(DeductionId("deduction-1"))
+
+    with SQLiteUnitOfWork(database) as uow:
+        after = (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        )
+    assert after == before
+    clock.value += timedelta(hours=1)
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(minutes=30)
+    assert (
+        service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH)).active_deduction_kind
+        == DeductionKind.LUNCH
+    )
+
+
+@pytest.mark.parametrize("selected_history", [False, True])
+def test_restore_open_work_rejects_completed_overlap(
+    tmp_path: Path, selected_history: bool
+) -> None:
+    service, clock, database = build_service(tmp_path, datetime(2026, 9, 15, 8, 0, tzinfo=UTC))
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(minutes=30)
+    service.delete_work_session(SessionId("session-1"))
+    version = service.entry_history_for_day(date(2026, 9, 15))[0]
+    clock.value = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 9, 0, tzinfo=UTC),
+            datetime(2026, 9, 15, 10, 0, tzinfo=UTC),
+        )
+    )
+    with SQLiteUnitOfWork(database) as uow:
+        before = (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        )
+
+    with pytest.raises(OverlappingIntervalError):
+        if selected_history:
+            service.restore_history_entry(version.audit_id)
+        else:
+            service.restore_work_session(SessionId("session-1"))
+
+    with SQLiteUnitOfWork(database) as uow:
+        after = (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        )
+    assert after == before
+    assert service.active_state().session_id is None
+    assert service.today_summary().net_seconds == 3600
+
+
+@pytest.mark.parametrize("entity", ["work", "deduction"])
+@pytest.mark.parametrize("action", ["edit", "latest", "history"])
+def test_independent_legacy_aggregates_can_be_corrected_one_at_a_time(
+    tmp_path: Path, entity: str, action: str
+) -> None:
+    service, clock, database = build_service(tmp_path, datetime(2026, 9, 16, 18, tzinfo=UTC))
+    entries = []
+    for day in (14, 15):
+        start = datetime(2026, 9, day, 7 if entity == "work" else 8, tzinfo=UTC)
+        finish = datetime(2026, 9, day, 16, tzinfo=UTC)
+        session = service.add_manual_session(ManualWorkSessionCommand(start, finish))
+        if entity == "work":
+            service.update_work_session(
+                UpdateWorkSessionCommand(session.id, start + timedelta(hours=1), finish)
+            )
+            entries.append((session.id, start, finish))
+        else:
+            deduction = service.add_manual_deduction(
+                ManualDeductionCommand(
+                    session.id,
+                    DeductionKind.LUNCH,
+                    start + timedelta(hours=4),
+                    start + timedelta(hours=5),
+                )
+            )
+            service.update_deduction(
+                UpdateDeductionCommand(
+                    deduction.id, start + timedelta(hours=5), start + timedelta(hours=6)
+                )
+            )
+            entries.append((deduction.id, start + timedelta(hours=4), start + timedelta(hours=5)))
+    if entity == "work":
+        with SQLiteUnitOfWork(database) as uow:
+            for identifier, start, _ in entries:
+                # Historical sync accepted deductions outside their actual parent.
+                uow.deductions.add(
+                    Deduction(
+                        DeductionId(f"imported-{identifier}"),
+                        SessionId(identifier),
+                        DeductionKind.LUNCH,
+                        start,
+                        start + timedelta(hours=1),
+                        created_at=clock.value,
+                        updated_at=clock.value,
+                    )
+                )
+    else:
+        with SQLiteUnitOfWork(database) as uow:
+            for identifier, _, _ in entries:
+                imported = uow.deductions.get(DeductionId(identifier))
+                assert imported is not None
+                imported.actual_started_at -= timedelta(hours=6)
+                imported.actual_ended_at = imported.actual_started_at + timedelta(hours=1)
+                uow.deductions.save(imported)
+
+    for identifier, start, finish in entries:
+        if action == "history":
+            history = service.entry_history_for_day(start.date())
+            version = next(item for item in history if item.entity_id == identifier)
+            restored = service.restore_history_entry(version.audit_id)
+        elif entity == "work":
+            restored = (
+                service.update_work_session(
+                    UpdateWorkSessionCommand(SessionId(identifier), start, finish)
+                )
+                if action == "edit"
+                else service.restore_work_session(SessionId(identifier))
+            )
+        else:
+            restored = (
+                service.update_deduction(
+                    UpdateDeductionCommand(DeductionId(identifier), start, finish)
+                )
+                if action == "edit"
+                else service.restore_deduction(DeductionId(identifier))
+            )
+        assert restored.actual_started_at == start
+        assert restored.actual_ended_at == finish
+    with SQLiteUnitOfWork(database) as uow:
+        assert len(uow.audit.list_active(clock.value)) == 4
+
+
+@pytest.mark.parametrize("entity", ["work_session", "deduction"])
+@pytest.mark.parametrize("selected_history", [False, True])
+def test_malformed_restored_rounding_is_refused_before_persistence(
+    tmp_path: Path, entity: str, selected_history: bool
+) -> None:
+    service, clock, database = build_service(tmp_path, datetime(2026, 9, 15, 18, tzinfo=UTC))
+    session = service.add_manual_session(
+        ManualWorkSessionCommand(
+            datetime(2026, 9, 15, 8, tzinfo=UTC), datetime(2026, 9, 15, 16, tzinfo=UTC)
+        )
+    )
+    if entity == "work_session":
+        identifier = str(session.id)
+        service.update_work_session(
+            UpdateWorkSessionCommand(
+                session.id,
+                datetime(2026, 9, 15, 9, tzinfo=UTC),
+                datetime(2026, 9, 15, 16, tzinfo=UTC),
+            )
+        )
+    else:
+        deduction = service.add_manual_deduction(
+            ManualDeductionCommand(
+                session.id,
+                DeductionKind.LUNCH,
+                datetime(2026, 9, 15, 12, tzinfo=UTC),
+                datetime(2026, 9, 15, 13, tzinfo=UTC),
+            )
+        )
+        identifier = str(deduction.id)
+        service.update_deduction(
+            UpdateDeductionCommand(
+                deduction.id,
+                datetime(2026, 9, 15, 13, tzinfo=UTC),
+                datetime(2026, 9, 15, 14, tzinfo=UTC),
+            )
+        )
+    clock.value += timedelta(seconds=1)
+    with SQLiteUnitOfWork(database) as uow:
+        snapshot = uow.audit.latest(entity, identifier)
+        assert snapshot is not None
+        snapshot["rounding_minutes"] = 7
+        uow.audit.record("invalid-rounding", entity, identifier, "update", snapshot, clock.value)
+        before = (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        )
+
+    with pytest.raises(DomainError):
+        if selected_history:
+            service.restore_history_entry("invalid-rounding")
+        elif entity == "work_session":
+            service.restore_work_session(SessionId(identifier))
+        else:
+            service.restore_deduction(DeductionId(identifier))
+
+    with SQLiteUnitOfWork(database) as uow:
+        assert (
+            uow.sessions.list_all(),
+            uow.deductions.list_all(),
+            uow.audit.list_active(clock.value),
+        ) == before
+
+
 def test_sleep_detection_clamps_to_session_and_avoids_double_deduction(tmp_path: Path) -> None:
     start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
     service, clock, database = build_service(tmp_path, start)
@@ -581,3 +819,91 @@ def test_work_and_lunch_reminders_are_configurable_and_snoozable(tmp_path: Path)
     service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
     clock.value += timedelta(minutes=15)
     assert [reminder.kind for reminder in service.due_reminders()] == ["lunch"]
+
+
+def test_second_lunch_in_same_work_gets_own_reminder(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.snooze_reminder("lunch", 60)
+    clock.value += timedelta(minutes=1)
+    service.finish_deduction(FinishDeductionCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    assert service.due_reminders() == []
+
+
+@pytest.mark.parametrize("snooze_minutes", [15, 30, 60])
+def test_current_lunch_snooze_uses_selected_duration(tmp_path: Path, snooze_minutes: int) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.snooze_reminder("lunch", snooze_minutes)
+    clock.value += timedelta(minutes=snooze_minutes, seconds=-1)
+    assert service.due_reminders() == []
+    clock.value += timedelta(seconds=1)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+
+def test_ended_lunch_reminder_is_retired_and_undo_can_remind_again(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(hours=9)
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    assert [item.kind for item in service.due_reminders()] == ["work"]
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.finish_deduction(FinishDeductionCommand())
+    assert service.due_reminders() == []
+    assert service.undo_last_timer_action().active_deduction_kind is DeductionKind.LUNCH
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+    restarted_ids = FixedIds()
+    restarted_ids.deduction_count = 1
+    restarted = TimeTrackingApplicationService(
+        lambda: SQLiteUnitOfWork(database), clock, restarted_ids
+    )
+    assert restarted.due_reminders() == []
+    clock.value += timedelta(minutes=1)
+    restarted.finish_deduction(FinishDeductionCommand())
+    restarted.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in restarted.due_reminders()] == ["lunch"]
+
+
+def test_deleting_active_lunch_does_not_suppress_next_lunch(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, _ = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+    service.delete_deduction(DeductionId("deduction-1"))
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]
+
+
+def test_legacy_parent_keyed_lunch_state_is_ignored(tmp_path: Path) -> None:
+    start = datetime(2026, 9, 15, 7, 0, tzinfo=UTC)
+    service, clock, database = build_service(tmp_path, start)
+    service.start_work(StartWorkCommand())
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    with SQLiteUnitOfWork(database) as uow:
+        uow.settings.save("reminder_notified_lunch", {"session_id": "session-1"}, start)
+        uow.settings.save(
+            "reminder_snooze_lunch",
+            {"session_id": "session-1", "until": (start + timedelta(hours=2)).isoformat()},
+            start,
+        )
+    clock.value += timedelta(minutes=45)
+    assert [item.kind for item in service.due_reminders()] == ["lunch"]

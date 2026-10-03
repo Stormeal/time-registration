@@ -9,11 +9,13 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from qi_flow import __version__
+from qi_flow.application.desktop import AvailableUpdate as AvailableUpdate
+from qi_flow.application.desktop import UpdateError as UpdateError
 
 _RELEASE_URL = "https://api.github.com/repos/Stormeal/time-registration/releases/latest"
 _ASSET_NAME = "QI-Flow-Update.zip"
@@ -22,25 +24,15 @@ _MAX_PACKAGE_BYTES = 1_000_000_000
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 
-@dataclass(frozen=True, slots=True)
-class AvailableUpdate:
-    version: str
-    download_url: str
-    sha256: str
-    size: int
-
-
-class UpdateError(Exception):
-    """Safe-to-display update check or download failure."""
-
-
 class ReleaseClient:
     """Read the public GitHub release feed and stage its verified app bundle."""
 
     def __init__(self, opener: Callable[..., Any] = urllib.request.urlopen) -> None:
         self._opener = opener
 
-    def check(self) -> AvailableUpdate | None:
+    def check(self, *, cancelled: Callable[[], bool] = lambda: False) -> AvailableUpdate | None:
+        deadline = monotonic() + 30
+        self._check_job(cancelled, deadline)
         request = urllib.request.Request(
             _RELEASE_URL,
             headers={
@@ -51,7 +43,14 @@ class ReleaseClient:
         )
         try:
             with self._opener(request, timeout=15) as response:
-                payload = json.load(response)
+                content = bytearray()
+                while chunk := response.read(65536):
+                    self._check_job(cancelled, deadline)
+                    content.extend(chunk)
+                    if len(content) > 1_000_000:
+                        raise UpdateError("The release metadata exceeded its supported size.")
+                self._check_job(cancelled, deadline)
+                payload = json.loads(content)
         except (
             OSError,
             urllib.error.URLError,
@@ -105,7 +104,11 @@ class ReleaseClient:
         update: AvailableUpdate,
         destination: Path,
         progress: Callable[[int, int], None] | None = None,
+        *,
+        cancelled: Callable[[], bool] = lambda: False,
     ) -> Path:
+        deadline = monotonic() + 300
+        self._check_job(cancelled, deadline)
         if not update.download_url.startswith(_ASSET_PREFIX):
             raise UpdateError("The update package URL is not trusted.")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +121,7 @@ class ReleaseClient:
         try:
             with self._opener(request, timeout=30) as response, destination.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
+                    self._check_job(cancelled, deadline)
                     received += len(chunk)
                     if received > update.size or received > _MAX_PACKAGE_BYTES:
                         raise UpdateError("The update package exceeded its published size.")
@@ -125,6 +129,7 @@ class ReleaseClient:
                     output.write(chunk)
                     if progress is not None:
                         progress(received, update.size)
+            self._check_job(cancelled, deadline)
             if received != update.size or digest.hexdigest() != update.sha256:
                 raise UpdateError("The update package failed its integrity check.")
         except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
@@ -134,3 +139,10 @@ class ReleaseClient:
             destination.unlink(missing_ok=True)
             raise
         return destination
+
+    @staticmethod
+    def _check_job(cancelled: Callable[[], bool], deadline: float) -> None:
+        if cancelled():
+            raise UpdateError("Update operation cancelled; QI Flow is unchanged.")
+        if monotonic() >= deadline:
+            raise UpdateError("Update operation timed out; QI Flow is unchanged.")

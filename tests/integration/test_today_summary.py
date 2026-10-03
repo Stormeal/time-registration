@@ -1,6 +1,8 @@
 """Today's allocated summary uses existing rounding and Copenhagen rules."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
 
 from qi_flow.application.dto import (
     FinishWorkCommand,
@@ -11,6 +13,7 @@ from qi_flow.application.dto import (
 )
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.models import DeductionKind
+from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.system import UuidIdentifierGenerator
@@ -96,3 +99,25 @@ def test_active_lunch_duration_uses_injected_clock(tmp_path):
     clock.value += timedelta(minutes=7, seconds=3)
     assert hasattr(service, "active_lunch_seconds")
     assert service.active_lunch_seconds() == 423
+
+
+@pytest.mark.parametrize("work_date", [date(2026, 3, 29), date(2026, 10, 25)])
+def test_completed_day_details_include_first_and_final_hours_only(tmp_path, work_date):
+    service, _ = build(tmp_path, datetime(2026, 11, 1, tzinfo=UTC))
+    expected_ids = set()
+    for day, hour in [
+        (work_date - timedelta(days=1), 23),
+        (work_date, 0),
+        (work_date, 23),
+        (work_date + timedelta(days=1), 0),
+    ]:
+        start = datetime.combine(day, datetime.min.time(), COPENHAGEN).replace(hour=hour, minute=15)
+        session = service.add_manual_session(
+            ManualWorkSessionCommand(start, start + timedelta(minutes=30))
+        )
+        if day == work_date:
+            expected_ids.add(session.id)
+
+    assert {session.id for session in service.completed_sessions_for_day(work_date)} == expected_ids
+    summary = service.summaries_for_range(work_date, work_date + timedelta(days=1))[0]
+    assert (summary.session_count, summary.net_seconds) == (2, 3600)

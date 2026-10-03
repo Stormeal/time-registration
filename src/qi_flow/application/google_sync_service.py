@@ -25,7 +25,7 @@ from qi_flow.application.sync_models import (
     validate_group,
 )
 from qi_flow.application.sync_payloads import day_payload, deduction_payload, session_payload
-from qi_flow.application.sync_reconciliation import SyncReconciler
+from qi_flow.application.sync_reconciliation import SyncReconciler, validate_completed_parents
 from qi_flow.domain.interval_validation import validate_intervals
 from qi_flow.domain.models import (
     DayDetails,
@@ -327,6 +327,7 @@ class SyncService(SyncPublicationService):
             changes = finalize_group(drafts)
             for change in changes:
                 self._reconciler._apply_candidate(change, sessions, deductions, days, now)
+            validate_completed_parents(changes, sessions, deductions)
             for deduction in deductions.values():
                 if (
                     deduction.deleted_at is None

@@ -63,7 +63,12 @@ class SyncSchedule:
         else:
             self._failures = min(self._failures + 1, 6)
             delay = max(min(15 * 2 ** (self._failures - 1), 300), retry_after)
-            self._retry_at = now + timedelta(seconds=delay)
+            try:
+                self._retry_at = now + timedelta(seconds=delay)
+            except OverflowError:
+                # A server delay beyond datetime's range must not escape into a Qt slot.
+                # Reconfiguration or an explicit manual sync can still recover the binding.
+                self._retry_at = datetime.max.replace(tzinfo=now.tzinfo)
 
     def close(self) -> None:
         self._closing = True

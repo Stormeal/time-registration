@@ -232,3 +232,70 @@ def test_failed_outbox_insert_rolls_back_payload_and_conflict_closure(rig):
         assert uow.sessions.get(SessionId("work")).actual_ended_at.hour == 8
         assert uow.sync_for(TARGET).conflicts()
         assert uow.sync_for(TARGET).pending() == ()
+
+
+def test_resolution_cannot_attach_a_new_completed_child_to_local_active_work(rig):
+    from datetime import timedelta
+
+    from qi_flow.application.sync_payloads import deduction_payload
+    from qi_flow.domain.models import Deduction, DeductionId, DeductionKind
+
+    factory, service, reconciler = rig
+    child = Deduction(
+        DeductionId("child"),
+        SessionId("work"),
+        DeductionKind.LUNCH,
+        work().actual_started_at + timedelta(minutes=15),
+        work().actual_started_at + timedelta(minutes=30),
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    remote = finalize_group(
+        (
+            SyncChange(
+                "child-version",
+                2,
+                "deduction",
+                "child",
+                (),
+                "g-child",
+                (),
+                "",
+                {KEY: ("base",)},
+                "upsert",
+                deduction_payload(child),
+                NOW,
+                "device",
+            ),
+        )
+    )[0]
+    with factory() as uow:
+        uow.sessions.add(
+            WorkSession(
+                SessionId("running"), NOW - timedelta(hours=2), created_at=NOW, updated_at=NOW
+            )
+        )
+        uow.sync_for(TARGET).observe((remote,))
+    reconciler.reconcile()
+    with factory() as uow:
+        conflict = next(
+            c for c in uow.sync_for(TARGET).conflicts() if ("deduction", "child") in c.entity_keys
+        )
+    reviewed = service.review(conflict.conflict_id)
+    proposed_child = replace(
+        child,
+        session_id=SessionId("running"),
+        actual_started_at=NOW - timedelta(hours=1),
+        actual_ended_at=NOW - timedelta(minutes=30),
+    )
+    choices = {
+        KEY: session_payload(work()),
+        ("deduction", "child"): deduction_payload(proposed_child),
+    }
+    with pytest.raises(ValueError, match=r"completed|running|active"):
+        service.resolve(reviewed.conflict.conflict_id, reviewed.conflict.head_ids, choices)
+    with factory() as uow:
+        assert uow.sessions.get(SessionId("running")).is_active
+        assert uow.deductions.get(DeductionId("child")) is None
+        assert uow.sync_for(TARGET).pending() == ()
+        assert uow.sync_for(TARGET).conflicts()

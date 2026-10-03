@@ -35,6 +35,7 @@ def test_open_and_five_minute_periodic_checks(rig):
     clock, schedule, state = rig
     current = state()
     assert schedule.due(current, busy=False)
+
     schedule.started(current)
     assert not schedule.due(current, busy=True)
     schedule.finished(current.binding, succeeded=True)
@@ -42,6 +43,16 @@ def test_open_and_five_minute_periodic_checks(rig):
     assert not schedule.due(current, busy=False)
     clock.value += timedelta(microseconds=1)
     assert schedule.due(current, busy=False)
+
+
+def test_unrepresentable_retry_after_cannot_crash_scheduler_and_binding_can_recover(rig):
+    clock, schedule, state = rig
+    current = state()
+    schedule.started(current)
+    schedule.finished(current.binding, succeeded=False, retry_after=1e100)
+    clock.value += timedelta(days=1)
+    assert not schedule.due(current, busy=False)
+    assert schedule.due(state(generation=2), busy=False)
 
 
 def test_new_eligible_edits_coalesce_during_a_job_without_ack_echo(rig):

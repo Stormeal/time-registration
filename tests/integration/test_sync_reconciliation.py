@@ -113,6 +113,104 @@ def test_unequal_revisions_and_copied_device_do_not_choose_between_independent_h
         assert repo.pending() == ()
 
 
+def test_remote_resolution_closes_superseded_conflict_but_later_fork_remains(rig):
+    factory, stage, reconcile = rig
+    stage(work_change("seed"))
+    reconcile()
+    stage(
+        work_change("a", session(finish=9), parents=("seed",)),
+        work_change("b", session(finish=10), parents=("seed",)),
+    )
+    reconcile()
+    with factory() as uow:
+        assert len(uow.sync_for(TARGET).conflicts()) == 1
+    stage(work_change("resolved", session(finish=9), parents=("a", "b")))
+    reconcile()
+    with factory() as uow:
+        repo = uow.sync_for(TARGET)
+        assert repo.heads(("work_session", "work")) == ("resolved",)
+        assert repo.conflicts() == ()
+        assert repo.pending() == ()
+    # A late writer sharing the original base still requires a fresh explicit decision.
+    stage(work_change("late", session(finish=11), parents=("seed",)))
+    reconcile()
+    with factory() as uow:
+        conflict = uow.sync_for(TARGET).conflicts()[0]
+        assert conflict.head_ids == frozenset({"resolved", "late"})
+        assert uow.sessions.get(SessionId("work")).actual_ended_at.hour == 9
+
+
+def test_remote_completed_child_cannot_finish_a_local_unresolved_lunch(rig):
+    factory, stage, reconcile = rig
+    stage(work_change("seed"))
+    reconcile()
+    start = session().actual_started_at + timedelta(minutes=15)
+    local = Deduction(
+        DeductionId("child"),
+        SessionId("work"),
+        DeductionKind.LUNCH,
+        start,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    # Legacy/restored unresolved data is not permission for sync to finish a local timer.
+    with factory() as uow:
+        uow.deductions.add(local)
+    remote = finalize_group(
+        (
+            SyncChange(
+                "completed-child",
+                2,
+                "deduction",
+                "child",
+                (),
+                "g-child",
+                (),
+                "",
+                {("work_session", "work"): ("seed",)},
+                "upsert",
+                deduction_payload(replace(local, actual_ended_at=start + timedelta(minutes=15))),
+                NOW,
+                "other-device",
+            ),
+        )
+    )[0]
+    stage(remote)
+    reconcile()
+    with factory() as uow:
+        assert uow.deductions.get(DeductionId("child")).is_active
+        assert uow.sync_for(TARGET).conflicts()
+        assert uow.sync_for(TARGET).heads(("deduction", "child")) == ()
+
+
+@pytest.mark.parametrize("blocked", ["invalid", "incomplete", "active"])
+def test_unmaterializable_remote_resolution_keeps_the_conflict_open(rig, blocked):
+    factory, stage, reconcile = rig
+    stage(work_change("seed"))
+    reconcile()
+    stage(
+        work_change("a", session(finish=9), parents=("seed",)),
+        work_change("b", session(finish=10), parents=("seed",)),
+    )
+    reconcile()
+    value = session(finish=9)
+    parents = ("a", "b")
+    if blocked == "invalid":
+        value = replace(value, actual_ended_at=NOW + timedelta(hours=1))
+    elif blocked == "incomplete":
+        parents += ("missing",)
+    else:
+        with factory() as uow:
+            uow.sessions.save(replace(session(), actual_ended_at=None))
+    stage(work_change("resolved", value, parents=parents))
+    reconcile()
+    with factory() as uow:
+        assert uow.sync_for(TARGET).conflicts()
+        assert uow.sync_for(TARGET).heads(("work_session", "work")) == ("seed",)
+        existing = uow.sessions.get(SessionId("work"))
+        assert existing.is_active if blocked == "active" else existing.actual_ended_at.hour == 8
+
+
 def test_different_ids_for_same_span_do_not_double_the_timesheet(rig):
     factory, stage, reconcile = rig
     stage(work_change("first", session("first")))

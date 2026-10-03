@@ -36,6 +36,22 @@ class _Graph:
     staged: tuple[dict[str, str], ...]
 
 
+def validate_completed_parents(
+    changes: Sequence[SyncChange],
+    sessions: Mapping[str, WorkSession],
+    deductions: Mapping[str, Deduction],
+) -> None:
+    """Sync may change only completed aggregates, including explicit resolutions."""
+    for change in changes:
+        if change.entity_kind != "deduction":
+            continue
+        child = deductions.get(change.entity_id)
+        if child is not None and child.deleted_at is None:
+            parent = sessions.get(str(child.session_id))
+            if parent is None or parent.actual_ended_at is None or parent.deleted_at is not None:
+                raise ValueError("Synced deductions require completed live work.")
+
+
 def _graph(changes: Sequence[SyncChange]) -> _Graph:
     by_id = {change.change_id: change for change in changes}
     groups: dict[str, list[SyncChange]] = {}
@@ -140,6 +156,38 @@ def _components(
         if key in components.parents or parent in components.parents:
             components.join(key, parent)
     return components.groups()
+
+
+def _close_superseded_conflicts(
+    repo: SyncRepository, graph: _Graph, staged_keys: set[EntityKey]
+) -> None:
+    if repo.problems():
+        return  # Quarantined ancestry cannot prove that an old conflict was resolved.
+    for conflict in repo.conflicts():
+        if set(conflict.entity_keys) & staged_keys:
+            continue
+        covered, advanced = True, False
+        for key in {change.entity_key for change in conflict.changes}:
+            tips = graph.tips.get(key, ())
+            if len(tips) != 1 or repo.heads(key) != (tips[0].change_id,):
+                covered = False
+                break
+            tip = tips[0]
+            ancestry = {tip.change_id}
+            pending = list(tip.parent_ids)
+            while pending:
+                identifier = pending.pop()
+                if identifier not in ancestry:
+                    ancestry.add(identifier)
+                    pending.extend(graph.changes[identifier].parent_ids)
+            old_heads = {c.change_id for c in conflict.changes if c.entity_key == key}
+            if not old_heads <= ancestry:
+                covered = False
+                break
+            advanced |= old_heads != {tip.change_id}
+        if covered and advanced:
+            # The materialized heads have passed whole-timesheet validation in this UoW.
+            repo.close_conflict(conflict.conflict_id, conflict.head_ids)
 
 
 class SyncReconciler:
@@ -286,19 +334,7 @@ class SyncReconciler:
                         self._apply_candidate(
                             change, candidate_sessions, candidate_deductions, candidate_days, now
                         )
-                    for change in applicable:
-                        if change.entity_kind == "deduction":
-                            child = candidate_deductions.get(change.entity_id)
-                            if child is not None and child.deleted_at is None:
-                                parent = candidate_sessions.get(str(child.session_id))
-                                if (
-                                    parent is None
-                                    or parent.actual_ended_at is None
-                                    or parent.deleted_at is not None
-                                ):
-                                    raise ValueError(
-                                        "Imported deductions require completed live work."
-                                    )
+                    validate_completed_parents(applicable, candidate_sessions, candidate_deductions)
                     validate_intervals(
                         tuple(candidate_sessions.values()),
                         tuple(candidate_deductions.values()),
@@ -357,6 +393,7 @@ class SyncReconciler:
                     candidate_deductions,
                     candidate_days,
                 )
+            _close_superseded_conflicts(repo, graph, staged_keys)
             repo.set_state("staged_reconciliation", staged)
             return ReconciliationResult(materialized, len(repo.conflicts()), len(staged))
 
@@ -377,6 +414,10 @@ class SyncReconciler:
             existing = sessions.get(identifier)
             if existing is not None and existing.is_active:
                 raise ValueError("Remote changes cannot replace local running work.")
+        if kind == "deduction":
+            previous = deductions.get(identifier)
+            if previous is not None and previous.is_active:
+                raise ValueError("Remote changes cannot replace a local running deduction.")
         if change.operation == "upsert":
             assert change.payload is not None
             entity = read_payload(kind, identifier, change.payload)
@@ -393,8 +434,6 @@ class SyncReconciler:
             sessions[identifier].deleted_at = now
             sessions[identifier].updated_at = now
         elif kind == "deduction" and identifier in deductions:
-            if deductions[identifier].is_active:
-                raise ValueError("Remote changes cannot replace a local running deduction.")
             deductions[identifier].deleted_at = now
             deductions[identifier].updated_at = now
         elif kind == "day_details":

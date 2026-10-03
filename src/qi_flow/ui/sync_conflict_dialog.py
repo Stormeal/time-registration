@@ -36,7 +36,7 @@ def _summary(payload: Mapping[str, object] | None) -> str:
     if "actual_started_at" in payload:
         stamps = []
         for field in ("actual_started_at", "actual_ended_at"):
-            value = payload[field]
+            value = payload.get(field)
             try:
                 instant = datetime.fromisoformat(value) if isinstance(value, str) else None
                 stamps.append(
@@ -44,7 +44,7 @@ def _summary(payload: Mapping[str, object] | None) -> str:
                     if instant is not None and instant.utcoffset() is not None
                     else "Missing time"
                 )
-            except ValueError:
+            except (ValueError, OverflowError):
                 stamps.append("Unrecognized date or time")
         attributes = [
             str(payload[field])
@@ -162,7 +162,7 @@ class SyncConflictDialog(QDialog):
                     instant = datetime.fromisoformat(value) if isinstance(value, str) else None
                     if instant is not None and instant.utcoffset() is not None:
                         widget.set_value(instant)
-                except ValueError:
+                except (ValueError, OverflowError):
                     pass  # Invalid incoming history remains reviewable for correction/deletion.
         self._refresh_correction(key)
 

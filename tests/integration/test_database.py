@@ -91,3 +91,22 @@ def test_database_prevents_two_active_sessions(tmp_path: Path) -> None:
         connection.execute(insert, ("first", timestamp, timestamp, timestamp))
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(insert, ("second", timestamp, timestamp, timestamp))
+
+
+def test_unreadable_database_can_be_replaced_while_failure_traceback_is_retained(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "unreadable.sqlite3")
+    database.database_file.write_bytes(b"unreadable synthetic database")
+    with pytest.raises(sqlite3.DatabaseError) as failure:
+        database.initialize()
+
+    replacement = SQLiteDatabase(tmp_path / "verified.sqlite3")
+    replacement.initialize()
+    # Recovery runs inside the exception handler, so its traceback still owns local variables.
+    assert failure.value.__traceback__ is not None
+    replacement.database_file.replace(database.database_file)
+    database.initialize()
+    with closing(database.connect()) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert failure.value.__traceback__ is not None

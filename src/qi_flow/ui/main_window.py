@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
     QTabBar,
@@ -38,6 +39,8 @@ from qi_flow.ui.today_page import TodayPage
 class MainWindow(QMainWindow):
     """Stable application shell for feature-owned pages."""
 
+    close_app_requested = Signal()
+
     def __init__(
         self,
         service: TimeTrackingApplicationService | None = None,
@@ -62,6 +65,7 @@ class MainWindow(QMainWindow):
         self._theme_manager = ThemeManager(app)
         self._theme_manager.setParent(self)
         self._service = service
+        self._tray_available = True
         self._theme_manager.apply(service.app_preferences().theme if service else "system")
 
         self._navigation = QTabBar()
@@ -170,6 +174,13 @@ class MainWindow(QMainWindow):
         self._version_label.setObjectName("applicationVersion")
         self._version_label.setProperty("role", "muted")
         self._version_label.setContentsMargins(24, 4, 24, 8)
+        self._close_app_button = QPushButton("Close app")
+        self._close_app_button.clicked.connect(self.close_app_requested.emit)
+        self._close_app_button.hide()
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 20, 0)
+        footer.addWidget(self._version_label, 1)
+        footer.addWidget(self._close_app_button)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -177,7 +188,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         layout.addWidget(navigation_panel)
         layout.addWidget(self._pages, 1)
-        layout.addWidget(self._version_label)
+        layout.addLayout(footer)
         self.setCentralWidget(content)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -245,6 +256,14 @@ class MainWindow(QMainWindow):
         self._navigation.setCurrentIndex(self._page_index["Settings"])
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Hide to tray; explicit process exit is owned by the tray controller."""
+        """Hide to tray, or request the ordinary exit confirmation when no tray exists."""
         event.ignore()
-        self.hide()
+        if self._tray_available:
+            self.hide()
+        else:
+            self.close_app_requested.emit()
+
+    def set_tray_available(self, available: bool) -> None:
+        """Keep the explicit exit action accessible when Windows has no system tray."""
+        self._tray_available = available
+        self._close_app_button.setVisible(not available)

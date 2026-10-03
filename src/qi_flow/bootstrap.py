@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -54,7 +55,8 @@ def _resolve_paths(data_root: Path | None) -> AppPaths:
 
 def _guard_key(data_dir: Path) -> str:
     """A short, filesystem/pipe-name-safe key unique to one data directory (D036)."""
-    return hashlib.sha1(str(data_dir).encode("utf-8")).hexdigest()[:16]
+    canonical = os.path.normcase(str(data_dir.resolve()))
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def build_runtime(data_root: Path | None = None) -> RuntimeContext:
@@ -81,8 +83,22 @@ def run(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
 
     log = logging.getLogger(__name__)
-    guard = SingleInstanceGuard(_guard_key(_resolve_paths(None).data_dir))
-    if not guard.try_acquire():
+    try:
+        data_dir = _resolve_paths(None).data_dir
+        data_dir.mkdir(parents=True, exist_ok=True)
+        guard = SingleInstanceGuard(
+            _guard_key(data_dir), lock_path=data_dir / "qi-flow.instance.lock"
+        )
+        owns_database = guard.try_acquire()
+    except OSError:
+        QMessageBox.critical(
+            None,
+            "QI Flow could not start",
+            "QI Flow could not establish exclusive access to its data directory. "
+            "Check that the directory is accessible and writable, then try again.",
+        )
+        return 1
+    if not owns_database:
         log.info("Another QI Flow instance is already running; it was asked to focus itself")
         return 0
 
@@ -118,8 +134,17 @@ def run(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Restore failed", str(restore_error))
             guard.release()
             return 1
-        QProcess.startDetached(sys.executable, sys.argv[1:])
+        # Restoration has completed; the replacement must be able to own the data immediately.
         guard.release()
+        launched, _pid = QProcess.startDetached(sys.executable, sys.argv[1:])
+        if not launched:
+            QMessageBox.critical(
+                None,
+                "QI Flow could not restart",
+                "Your data was restored, but QI Flow could not restart automatically. "
+                "Please open QI Flow again from the Start menu or your shortcut.",
+            )
+            return 1
         return 0
     log.info("QI Flow %s started; data directory initialized", __version__)
 
@@ -168,8 +193,11 @@ def run(argv: list[str] | None = None) -> int:
 
     exit_coordinator = ExitCoordinator(service, window)
     exit_coordinator.exit_confirmed.connect(app.quit)
+    window.close_app_requested.connect(exit_coordinator.request_exit)
 
-    if QSystemTrayIcon.isSystemTrayAvailable():
+    tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+    window.set_tray_available(tray_available)
+    if tray_available:
         tray = TrayController(icon, service, startup_manager)
         tray.open_requested.connect(window.reveal)
         tray.open_timesheet_requested.connect(window.show_timesheet)

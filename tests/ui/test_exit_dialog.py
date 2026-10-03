@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
 from qi_flow.application.dto import StartDeductionCommand, StartWorkCommand
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
+from qi_flow.domain.errors import InvalidIntervalError
 from qi_flow.domain.models import DeductionId, DeductionKind, SessionId
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
@@ -157,3 +160,50 @@ def test_default_dialog_offers_finish_while_only_working(tmp_path: object) -> No
     box = coordinator._build_dialog(lunch_active=False)
     labels = {button.text() for button in box.buttons()}
     assert "Finish work and close" in labels
+
+
+def test_failed_finish_keeps_app_open_and_session_recoverable(
+    tmp_path: object, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 9, 15, 9, 0, tzinfo=UTC)
+    service, clock = build_service(tmp_path, now)
+    service.start_work(StartWorkCommand())
+    clock.value += timedelta(hours=2)
+    service.detect_sleep_gap(now + timedelta(minutes=5), clock.value)
+    coordinator = RecordingCoordinator(service, ExitChoice.FINISH_AND_CLOSE)
+    confirmed: list[bool] = []
+    warnings: list[str] = []
+    coordinator.exit_confirmed.connect(lambda: confirmed.append(True))
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: warnings.append(text))
+
+    coordinator.request_exit()
+
+    assert confirmed == []
+    assert warnings
+    assert service.active_state().session_id is not None
+    assert service.pending_sleep_gap() is not None
+
+
+@pytest.mark.parametrize(
+    "failure", [InvalidIntervalError("Correct the finish time."), OSError("disk full")]
+)
+def test_finish_error_does_not_confirm_exit(
+    tmp_path: object, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    service, _clock = build_service(tmp_path, datetime(2026, 9, 15, 9, 0, tzinfo=UTC))
+    service.start_work(StartWorkCommand())
+    coordinator = RecordingCoordinator(service, ExitChoice.FINISH_AND_CLOSE)
+    confirmed: list[bool] = []
+    warnings: list[str] = []
+    coordinator.exit_confirmed.connect(lambda: confirmed.append(True))
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: warnings.append(text))
+
+    def fail_finish(_command: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(service, "finish_work", fail_finish)
+    coordinator.request_exit()
+
+    assert confirmed == []
+    assert warnings
+    assert service.active_state().session_id is not None

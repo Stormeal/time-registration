@@ -64,11 +64,15 @@ class SQLiteDatabase:
     def connect(self) -> sqlite3.Connection:
         """Open a connection configured for integrity and modest concurrency."""
         connection = sqlite3.connect(self._database_file, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = NORMAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA busy_timeout = 5000")
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     @contextmanager

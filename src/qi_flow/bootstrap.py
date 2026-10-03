@@ -19,6 +19,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from qi_flow import __version__
+from qi_flow.application.backup_schedule import BackupSchedule
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
 from qi_flow.application.google_sync_service import (
@@ -47,6 +48,7 @@ from qi_flow.infrastructure.testhuset_browser import temporary_sheet
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
 from qi_flow.infrastructure.updates import ReleaseClient
+from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.exit_dialog import ExitCoordinator
 from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 from qi_flow.ui.main_window import MainWindow
@@ -169,7 +171,9 @@ def run(argv: list[str] | None = None) -> int:
         lambda: SQLiteUnitOfWork(context.database),
         SystemClock(),
     )
-    backups.ensure_daily_backup()
+    backup_controller = BackupController(
+        backups, BackupSchedule(SystemClock(), backups.destination_identity), app
+    )
     startup_manager = create_startup_manager()
     credentials = WindowsCredentialStore()
     dsb = DsbService(
@@ -251,6 +255,7 @@ def run(argv: list[str] | None = None) -> int:
         ReleaseClient(),
         google_controller,
         sync_actions=sync_actions,
+        backup_controller=backup_controller,
     )
     guard.focus_requested.connect(window.reveal)
 
@@ -258,13 +263,24 @@ def run(argv: list[str] | None = None) -> int:
     app.setWindowIcon(icon)
 
     exit_coordinator = ExitCoordinator(service, window)
+    shutting_down = False
 
     def finish_exit() -> None:
+        if not shutting_down or google_controller.busy or backup_controller.busy:
+            return
         window.allow_exit()
         app.quit()
 
     google_controller.ready_for_shutdown.connect(finish_exit)
-    exit_coordinator.exit_confirmed.connect(automatic_sync.begin_shutdown)
+    backup_controller.ready_for_shutdown.connect(finish_exit)
+
+    def begin_exit() -> None:
+        nonlocal shutting_down
+        shutting_down = True
+        automatic_sync.begin_shutdown()
+        backup_controller.begin_shutdown()
+
+    exit_coordinator.exit_confirmed.connect(begin_exit)
     window.close_app_requested.connect(exit_coordinator.request_exit)
 
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -300,6 +316,7 @@ def run(argv: list[str] | None = None) -> int:
     exit_code = app.exec()
     automatic_sync.begin_shutdown()
     google_controller.wait_for_shutdown()
+    backup_controller.wait_for_shutdown()
     if tray is not None:
         tray.hide()
     guard.release()

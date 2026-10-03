@@ -95,6 +95,43 @@ def test_backup_failure_is_persisted_until_a_later_success(tmp_path: Path) -> No
     assert manager.status().warning is None
 
 
+def test_new_folder_gets_todays_backup_after_old_folder_succeeded(tmp_path):
+    _, clock, database = build(tmp_path, datetime(2026, 10, 3, 12, tzinfo=UTC))
+    manager = BackupManager(database, tmp_path / "old", lambda: SQLiteUnitOfWork(database), clock)
+    assert manager.ensure_daily_backup() is not None
+    manager.set_folder(tmp_path / "new")
+    backup = manager.ensure_daily_backup()
+    assert backup is not None
+    assert backup.path.parent == (tmp_path / "new").resolve()
+    assert manager.ensure_daily_backup() is None
+
+
+def test_captured_backup_completion_cannot_mark_new_folder_or_day_successful(tmp_path):
+    _, clock, database = build(tmp_path, datetime(2026, 10, 3, 12, tzinfo=UTC))
+    manager = BackupManager(database, tmp_path / "old", lambda: SQLiteUnitOfWork(database), clock)
+    old_folder = manager.status_folder()
+    manager.set_folder(tmp_path / "new")
+    clock.value += timedelta(days=1)
+    backup = manager.ensure_daily_backup(destination=old_folder, work_date=date(2026, 10, 3))
+    assert backup is not None
+    assert "2026-10-03" in backup.path.name
+    assert manager.ensure_daily_backup() is not None
+
+
+def test_cancelled_backup_keeps_prior_valid_copy_and_persists_no_success(tmp_path):
+    _, clock, database = build(tmp_path, datetime(2026, 10, 3, 12, tzinfo=UTC))
+    manager = BackupManager(
+        database, tmp_path / "backups", lambda: SQLiteUnitOfWork(database), clock
+    )
+    first = manager.ensure_daily_backup()
+    before = first.path.read_bytes()
+    clock.value += timedelta(days=1)
+    assert manager.ensure_daily_backup(cancelled=lambda: True) is None
+    assert first.path.read_bytes() == before
+    assert not list(first.path.parent.glob("*.tmp"))
+    assert manager.ensure_daily_backup() is not None
+
+
 def test_restore_creates_a_safety_copy_before_replacing_live_database(tmp_path: Path) -> None:
     service, clock, database = build(tmp_path, datetime(2026, 9, 15, 17, tzinfo=UTC))
     service.add_manual_session(

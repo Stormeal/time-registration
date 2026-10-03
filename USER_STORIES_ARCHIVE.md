@@ -241,8 +241,9 @@ Acceptance criteria:
 
 ### US15 — Back up local data automatically · P1
 
-Implementation status: **Complete** · active-session start correction covered by
-`tests/integration/test_time_tracking.py`.
+Implementation status: **Complete** · daily backup persistence and A14 unattended scheduling pass
+automated acceptance in the 645-test gate. Backup copies use owned worker connections; midnight,
+resume, destination changes and bounded retries work while the application remains open.
 
 As a consultant, I want automatic backups so that a machine or database problem does not erase my only timesheet.
 

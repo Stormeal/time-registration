@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from qi_flow import __version__
+from qi_flow.application.backups import BackupOperations
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.google_sync_service import SyncResult
@@ -28,11 +29,11 @@ from qi_flow.application.ports import GoogleConnection
 from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
-from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.infrastructure.updates import ReleaseClient
+from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.google_sync_controller import GoogleSyncController
 from qi_flow.ui.settings_page import SettingsPage
 from qi_flow.ui.testhuset_dialog import SheetFactory
@@ -49,7 +50,7 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         service: TimeTrackingApplicationService | None = None,
-        backups: BackupManager | None = None,
+        backups: BackupOperations | None = None,
         exporter: CsvTimesheetExporter | None = None,
         paths: AppPaths | None = None,
         startup: StartupManager | None = None,
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
         google_controller: GoogleSyncController | None = None,
         sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
         sync_actions: GoogleSyncActions | None = None,
+        backup_controller: BackupController | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -118,6 +120,7 @@ class MainWindow(QMainWindow):
                 google_controller,
                 sync_command,
                 sync_actions,
+                backup_controller,
             )
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)

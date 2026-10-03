@@ -146,11 +146,22 @@ part of Task 19 before final lifecycle acceptance.
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |
 | 17 — Reminder identity | A15; US02, US14 | Complete; independent timers and stale-dialog guards pass 57 focused tests and the integrated gate. |
-| 18 — Unattended backups | A14; US15 | Pending. |
+| 18 — Unattended backups | A14; US15 | Automated acceptance and 645-test gate passed. |
 | 19 — Architecture / CI | Cross-cutting | Pending. |
 | 20 — Windows and integration release gates | US21, US28–US32 | Pending. |
 
 ## Implementation rulings
+
+Task 18 passed **645 tests in 81.54 seconds**, 133 formatted Python files, Ruff clean and strict
+mypy clean for 73 source modules. A pure Copenhagen date/destination policy schedules opening,
+midnight, resume and folder changes with 15-minute failure retries. SQLite copies run on an owned
+worker with its own connections and cooperative cancellation; staging and atomic replacement keep
+prior valid copies intact on failure. Daily success is scoped to the captured folder/date. Copy and
+integrity operations are bounded, the newest 30 daily files are retained, and safety copies remain
+separate. Settings receives status and manual backup actions through the application backup port.
+The shared owned-worker controller is extracted from the Google controller. Composed exit cancels
+and joins both Google and backup work before lock release. Restore/update/temporary-browser workers
+are still the remaining Task 19 lifecycle scope.
 
 Task 14 passed **634 tests in 74.29 seconds**, Ruff formatting/lint and strict mypy clean.
 Settings selects stable IDs from scanned Testhuset branches without name defaults. DSB uses completed

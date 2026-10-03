@@ -4,30 +4,18 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from time import monotonic
 
+from qi_flow.application.backups import BackupStatusView as BackupStatusView
+from qi_flow.application.backups import BackupView as BackupView
 from qi_flow.application.ports import Clock, UnitOfWork
 from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
-
-
-@dataclass(frozen=True, slots=True)
-class BackupView:
-    """A verified database backup that is safe to offer for restoration."""
-
-    path: Path
-    created_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class BackupStatusView:
-    folder: Path
-    warning: str | None
-    latest_backup: BackupView | None
 
 
 class BackupManager:
@@ -35,6 +23,7 @@ class BackupManager:
 
     _FOLDER_KEY = "backup_folder"
     _LAST_SUCCESS_KEY = "backup_last_success_date"
+    _LAST_FOLDER_KEY = "backup_last_success_folder"
     _WARNING_KEY = "backup_warning"
     _BACKUP_PREFIX = "qi-flow-backup-"
 
@@ -67,20 +56,34 @@ class BackupManager:
             uow.settings.save(self._FOLDER_KEY, str(resolved), self._now())
         return self.status()
 
-    def ensure_daily_backup(self) -> BackupView | None:
+    def ensure_daily_backup(
+        self,
+        *,
+        destination: Path | None = None,
+        work_date: date | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
+    ) -> BackupView | None:
         """Create today's backup once, or retry if the previous attempt failed."""
-        today = self._now().astimezone(COPENHAGEN).date().isoformat()
+        today = (work_date or self._now().astimezone(COPENHAGEN).date()).isoformat()
+        folder = (destination or self.status_folder()).expanduser().resolve()
+        identity = os.path.normcase(str(folder))
         with self._uow_factory() as uow:
             last_success = uow.settings.get(self._LAST_SUCCESS_KEY)
+            last_folder = uow.settings.get(self._LAST_FOLDER_KEY)
             warning = uow.settings.get(self._WARNING_KEY)
-        if last_success == today and not warning:
+        if last_success == today and last_folder == identity and not warning:
             return None
         try:
-            backup = self._create_daily_backup(today)
+            backup = self._create_daily_backup(today, folder, cancelled=cancelled)
         except (OSError, sqlite3.Error) as error:
-            self._set_warning(f"Backup failed: {error}")
+            if self.destination_identity() == identity:
+                self._set_warning(f"Backup failed: {error}")
             return None
-        self._clear_warning(today)
+        if (
+            self.destination_identity() == identity
+            and self._now().astimezone(COPENHAGEN).date().isoformat() == today
+        ):
+            self._clear_warning(today, identity)
         return backup
 
     def list_backups(self, folder: Path | None = None) -> list[BackupView]:
@@ -122,6 +125,13 @@ class BackupManager:
         with self._uow_factory() as uow:
             return self._folder_from_value(uow.settings.get(self._FOLDER_KEY))
 
+    def destination_identity(self) -> str:
+        return os.path.normcase(str(self.status_folder().expanduser().resolve()))
+
+    def has_daily_backup(self, destination: Path, work_date: date) -> bool:
+        path = destination / f"{self._BACKUP_PREFIX}{work_date.isoformat()}.sqlite3"
+        return path.is_file() and self._is_valid_database(path)
+
     def restore(self, backup: BackupView) -> Path:
         """Replace the live database from a verified backup and preserve a safety copy."""
         if not self._is_valid_database(backup.path):
@@ -143,14 +153,23 @@ class BackupManager:
             staged.unlink(missing_ok=True)
         return safety
 
-    def _create_daily_backup(self, today: str) -> BackupView:
-        folder = self.status_folder()
+    def _create_daily_backup(
+        self, today: str, folder: Path, *, cancelled: Callable[[], bool]
+    ) -> BackupView:
         folder.mkdir(parents=True, exist_ok=True)
         destination = folder / f"{self._BACKUP_PREFIX}{today}.sqlite3"
-        self._copy_database(self._database.database_file, destination)
-        if not self._is_valid_database(destination):
-            destination.unlink(missing_ok=True)
-            raise sqlite3.DatabaseError("The completed backup failed integrity verification.")
+        descriptor, name = tempfile.mkstemp(prefix=".qi-flow-backup-", suffix=".tmp", dir=folder)
+        os.close(descriptor)
+        staged = Path(name)
+        try:
+            self._copy_database(self._database.database_file, staged, cancelled=cancelled)
+            if not self._is_valid_database(staged):
+                raise sqlite3.DatabaseError("The completed backup failed integrity verification.")
+            if cancelled():
+                raise InterruptedError("Backup cancelled; the prior valid copy is unchanged.")
+            os.replace(staged, destination)
+        finally:
+            staged.unlink(missing_ok=True)
         self._retain_newest(folder, keep=30)
         return BackupView(
             destination, datetime.fromtimestamp(destination.stat().st_mtime, COPENHAGEN)
@@ -168,18 +187,34 @@ class BackupManager:
         return destination
 
     @staticmethod
-    def _copy_database(source: Path, destination: Path) -> None:
+    def _copy_database(
+        source: Path,
+        destination: Path,
+        *,
+        cancelled: Callable[[], bool] = lambda: False,
+    ) -> None:
+        deadline = monotonic() + 30
+
+        def progress(status: int, remaining: int, total: int) -> None:
+            if cancelled():
+                raise InterruptedError("Backup cancelled; the prior valid copy is unchanged.")
+            if monotonic() >= deadline:
+                raise TimeoutError("Database copy timed out; try again when storage is available.")
+
+        progress(0, 0, 0)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with (
             closing(sqlite3.connect(source)) as source_connection,
             closing(sqlite3.connect(destination)) as target,
         ):
-            source_connection.backup(target)
+            source_connection.backup(target, pages=128, progress=progress, sleep=0.05)
 
     @staticmethod
     def _is_valid_database(path: Path) -> bool:
+        deadline = monotonic() + 30
         try:
             with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+                connection.set_progress_handler(lambda: int(monotonic() >= deadline), 10000)
                 result = connection.execute("PRAGMA integrity_check").fetchone()
                 return result is not None and result[0] == "ok"
         except (OSError, sqlite3.Error):
@@ -193,9 +228,10 @@ class BackupManager:
         with self._uow_factory() as uow:
             uow.settings.save(self._WARNING_KEY, warning, self._now())
 
-    def _clear_warning(self, today: str) -> None:
+    def _clear_warning(self, today: str, folder: str) -> None:
         with self._uow_factory() as uow:
             uow.settings.save(self._LAST_SUCCESS_KEY, today, self._now())
+            uow.settings.save(self._LAST_FOLDER_KEY, folder, self._now())
             uow.settings.save(self._WARNING_KEY, None, self._now())
 
     def _folder_from_value(self, value: object) -> Path:

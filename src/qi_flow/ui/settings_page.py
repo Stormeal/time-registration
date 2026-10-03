@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qi_flow.application.backups import BackupOperations, BackupView
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import ReminderSettingsView
 from qi_flow.application.google_sync import GoogleSyncSettings
@@ -56,11 +57,11 @@ from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import IsoWeek
 from qi_flow.domain.time_rules import COPENHAGEN
-from qi_flow.infrastructure.backups import BackupManager, BackupView
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient, UpdateError
+from qi_flow.ui.backup_controller import BackupController
 from qi_flow.ui.controls import SettingsWheelGuard
 from qi_flow.ui.google_sync_controller import GoogleSyncController
 from qi_flow.ui.sync_conflict_dialog import SyncConflictDialog
@@ -129,7 +130,7 @@ class SettingsPage(QWidget):
     def __init__(
         self,
         service: TimeTrackingApplicationService,
-        backups: BackupManager,
+        backups: BackupOperations,
         exporter: CsvTimesheetExporter,
         paths: AppPaths,
         startup: StartupManager,
@@ -144,10 +145,14 @@ class SettingsPage(QWidget):
         google_controller: GoogleSyncController | None = None,
         sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
         sync_actions: GoogleSyncActions | None = None,
+        backup_controller: BackupController | None = None,
     ) -> None:
         super().__init__()
         self._service = service
         self._backups = backups
+        self._backup_controller = backup_controller
+        if backup_controller is not None:
+            backup_controller.status_changed.connect(lambda _: self.refresh())
         self._exporter = exporter
         self._paths = paths
         self._startup = startup
@@ -1207,8 +1212,13 @@ class SettingsPage(QWidget):
         except OSError as error:
             self._show_error("Could not save backup folder", str(error))
         self.refresh()
+        if self._backup_controller is not None:
+            self._backup_controller.poll()
 
     def _backup_now(self) -> None:
+        if self._backup_controller is not None:
+            self._backup_controller.request_backup(force=True)
+            return
         backup = self._backups.ensure_daily_backup()
         self.refresh()
         if backup is None and self._backups.status().warning:

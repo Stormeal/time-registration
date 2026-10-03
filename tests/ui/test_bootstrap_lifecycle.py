@@ -177,6 +177,16 @@ def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_rele
     monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
     operations, controllers, windows = [], [], []
     started = threading.Event()
+    backup_started = threading.Event()
+
+    def copy_backup(self, *, cancelled, **kwargs):
+        backup_started.set()
+        while not cancelled():
+            threading.Event().wait(0.01)
+        operations.append("backup-cancelled")
+        return None
+
+    monkeypatch.setattr(bootstrap.BackupManager, "ensure_daily_backup", copy_backup)
 
     class OAuth:
         def __init__(self, **kwargs):
@@ -227,7 +237,7 @@ def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_rele
         windows[0]._settings_page._authorize_google()
 
         def close_when_started():
-            if not started.is_set():
+            if not started.is_set() or not backup_started.is_set():
                 QTimer.singleShot(5, close_when_started)
                 return
             operations.append("close-requested")
@@ -238,13 +248,9 @@ def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_rele
 
     monkeypatch.setattr(qapp, "exec", run_loop)
     assert bootstrap.run(["qi-flow"]) == 0
-    assert operations[:5] == [
-        "close-requested",
-        "cancelled",
-        "ready",
-        "after-event-loop",
-        "released",
-    ]
+    expected = ("close-requested", "cancelled", "ready", "after-event-loop", "released")
+    assert [item for item in operations if item != "backup-cancelled"][:5] == list(expected)
+    assert operations.index("backup-cancelled") < operations.index("after-event-loop")
     qapp.setQuitOnLastWindowClosed(previous_quit_on_close)
     QCoreApplication.removePostedEvents(qapp, QEvent.Type.Quit)
     for window in windows:

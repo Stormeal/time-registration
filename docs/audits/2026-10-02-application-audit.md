@@ -1,5 +1,9 @@
 # QI Flow application audit — 2 October 2026
 
+**Current disposition — 4 October 2026:** A01–A18 are resolved and recorded in the
+[resolved-issue archive and backlog review](2026-10-04-resolved-issues.md). This report retains
+the original findings against the baseline; active stories still track required release acceptance.
+
 Audit started 2 October and completed 3 October 2026. Audited commit: `61b507f6a306263effc701bc0eedb03ee9a01ecd`. Runtime/source version: `0.2.6`; release builds stamp their own version as documented. This was a review of the current application, not an implementation change.
 
 The application has useful foundations: separate domain/application packages, injected business clocks and identifiers, versioned migrations, immediate timer persistence, and substantial interaction tests. The main risks are inconsistent validation when restoring/importing records, synchronization that can lose changes, and incomplete failure handling around desktop lifecycle and updates.

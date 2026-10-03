@@ -8,6 +8,10 @@ Branch: `codex/audit-remediation-2026-10-03`. Baseline application commit:
 `61b507f6a306263effc701bc0eedb03ee9a01ecd`. Work uses temporary databases, synthetic OAuth values,
 and local browser fixtures; release checks remain separate.
 
+Backlog reviewed on 4 October: [A01–A18 are archived with regression evidence](2026-10-04-resolved-issues.md).
+The fresh 672-test gate passed in 83.88 seconds. All eight active stories await the real release
+checks recorded below; no implementation task remains open from this audit.
+
 ## Verification baseline
 
 The isolated-worktree baseline passed `scripts/check.ps1`: 258 tests in 57.17 seconds,

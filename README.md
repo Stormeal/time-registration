@@ -105,6 +105,7 @@ manual; the workflow only creates prereleases when you run it.
 - [DECISIONS.md](DECISIONS.md): confirmed product decisions from the design interview.
 - [USER_STORIES.md](USER_STORIES.md): unfinished stories and current release acceptance.
 - [USER_STORIES_ARCHIVE.md](USER_STORIES_ARCHIVE.md): completed stories and the historical register.
+- [Resolved audit issues](docs/audits/2026-10-04-resolved-issues.md): archived defects, regression evidence and the review of remaining stories.
 - [DESIGN.md](DESIGN.md): interface direction and interaction model.
 - [ARCHITECTURE.md](ARCHITECTURE.md): module boundaries, dependency rules, data model, and handoff.
 - [AGENTS.md](AGENTS.md): working conventions for implementation agents.

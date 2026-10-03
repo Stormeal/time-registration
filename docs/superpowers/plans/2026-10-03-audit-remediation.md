@@ -10,7 +10,7 @@
 
 **Spec:** [Application audit](../../audits/2026-10-02-application-audit.md), [requirements](../../../REQUIREMENTS.md), [decisions](../../../DECISIONS.md), [active stories](../../../USER_STORIES.md), [archived acceptance criteria](../../../USER_STORIES_ARCHIVE.md), and [architecture](../../../ARCHITECTURE.md).
 
-**Status:** Implementation authorized and started on 2026-10-03 in the attached `codex/audit-remediation-2026-10-03` worktree. The audited baseline is commit `61b507f6a306263effc701bc0eedb03ee9a01ecd`; its quality gate passed with 258 tests. [Remediation progress](../../audits/2026-10-03-remediation-progress.md) records completed slices and fresh verification; the baseline result does not establish that the fixes pass.
+**Status:** Tasks 1–19 are complete, and all A01–A18 defects are [archived with regression evidence](../../audits/2026-10-04-resolved-issues.md). Fresh verification on 2026-10-04 passed 672 tests, formatting, lint and strict types. Task 20's automated gate, documentation and package dry build are complete; its four real-environment release checks remain open. [Remediation progress](../../audits/2026-10-03-remediation-progress.md) preserves implementation checkpoints and rulings.
 
 ## Global Constraints
 
@@ -18,7 +18,7 @@
 - Preserve the inward dependency rule. Domain uses the standard library; domain/application tests run without PySide6. UI contains no SQL and does not construct concrete integration adapters.
 - Use timezone-aware UTC timestamps internally and Europe/Copenhagen for calendar allocation. Inject business clocks and identifiers.
 - Persist timer transitions before presenting them as successful. Failed imports, restores, and edits must not leave partially changed aggregates.
-- Add the next numbered migration; never edit an applied migration. `0007` is currently next, but recheck before execution.
+- Add the next numbered migration; never edit an applied migration. The implementation added `0007_sync_changes.sql`; recheck the next number before future changes.
 - Do not store credentials, user notes, or time-entry contents in diagnostic logs. OAuth codes, state, callback URLs, and tokens are included in this exclusion.
 - Integrations and updates stay within the later authorizations in DECISIONS.md. Add no SAP integration, telemetry, global shortcuts, or automatic update installation.
 - Every behavior change needs a meaningful test at the owning layer. UI tests validate interactions and state transitions, not pixels or incidental wording.
@@ -48,7 +48,7 @@ Independent tasks may run in parallel only when they do not edit the same files.
 
 | Audit finding | Owning stories | Task |
 | --- | --- | --- |
-| A01 snapshot loss | US29, proposed US46 | 7–10 |
+| A01 snapshot loss | US29, US46 | 7–10 |
 | A02 missed conflicts | US29 | 7, 9, 11 |
 | A03 deduction without parent | US29 | 7, 9 |
 | A04 invalid imports | US29 | 2, 9 |
@@ -63,13 +63,17 @@ Independent tasks may run in parallel only when they do not edit the same files.
 | A13 export outside range | US17 | 15 |
 | A14 missing unattended backups | US15 | 18 |
 | A15 second-lunch reminder | US02, US14 | 17 |
-| A16 hidden deduction date | US05, US22, US35; proposed US44 | 16 |
+| A16 hidden deduction date | US05, US22, US35; US44 | 16 |
 | A17 no-tray exit | US09, US10 | 3 |
 | A18 implicit Replace | US27, US30, US45 | 6 |
 
-US44 adds endpoint-date editing and protected unsaved changes. US45 records the user's confirmed explicit-choice policy, superseding archived US27's default Replace. US46 adds guided migration of existing shared data. Other repairs remain under their existing stories; US31 is already accepted unfinished functionality.
+US44 adds endpoint-date editing and protected unsaved changes. US45 records the user's confirmed explicit-choice policy, superseding archived US27's default Replace. US46 adds guided migration of existing shared data. Other repairs remain under their existing stories; US31's branch filtering is implemented and awaits live release verification.
 
 ## Working and verification loop
+
+Checklists were reconciled against the implementation checkpoints and the fresh full gate on
+4 October 2026. The progress ledger records test-file splits and implementation adjustments;
+the resolved-issue archive links the current regressions. Only real release checks remain unchecked.
 
 For each task below:
 
@@ -113,7 +117,7 @@ PowerShell commands assume the repository root and `.\.venv\Scripts\python.exe`.
 - [x] Add no-tray close tests for inactive exit and active Cancel/Keep running/Finish. Assert the window remains accessible on cancellation or failed finish.
 - [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_single_instance_processes.py tests/ui/test_single_instance.py tests/ui/test_exit_dialog.py tests/ui/test_main_window.py -q`.
 - [x] Acquire a per-data-directory native OS file lock on Windows before migrations and retain its descriptor for the process lifetime; the existing socket is only for focus. OS ownership releases on process exit/crash and uses no PID, hostname, or age-based stale heuristic. Refusal to deliver focus never permits removing ownership. Other platforms retain a non-expiring Qt lock fallback. Cover Unicode paths, simultaneous startup, pre-listen startup, crash release, and permission/I/O errors with real Windows process tests. This execution ruling supersedes the initial Qt-lock/named-mutex proposal.
-- [ ] Emit exit only after successful finish persistence or explicit Keep running. Give no-tray users the same exit coordinator through window close and a visible Close app action. Shut down workers before releasing database ownership.
+- [x] Emit exit only after successful finish persistence or explicit Keep running. Give no-tray users the same exit coordinator through window close and a visible Close app action. Shut down workers before releasing database ownership.
 - [x] Close SQLite connections on configuration failure so retained exceptions cannot block corrupt-file recovery. Restore while owned, release ownership before replacement launch, and report failed launch.
 - [x] Re-run and gate; update architecture runtime ordering and US09–US11 behavior documentation.
 
@@ -173,26 +177,26 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Files:** Create `application/sync_models.py` under `src/qi_flow`, the next `infrastructure/sqlite/migrations/*_sync_changes.sql`, and `tests/integration/test_sync_persistence.py`; modify `application/ports.py`, `application/time_tracking.py`, `application/testhuset.py`, `application/google_sync_service.py`, `infrastructure/sqlite/repositories.py`, and `infrastructure/system.py` under `src/qi_flow`; create `docs/google-sync-v2.md`.
 
-- [ ] Add failure-injection tests: record update or outbox insertion failure rolls back both. Persist two successive offline edits with correct causal parents and retain them through restart.
-- [ ] Test completed work, deductions, day details, assignments, deletions, history restores, and configuration opt-out. An ended lunch with active parent creates no publishable orphan.
-- [ ] Test Finish → sync request within 30-second Undo window → Undo, including restart before the deadline. Persist the publication grace deadline and attempted-publication state. Test accepted append → lost response → reopen: a possibly published completion cannot be treated as never published. Persist a compensating withdrawal with local Undo; sync verifies/retries the completion before publishing its withdrawal. Active state remains local and Undo needs no network call. Completing again descends from the withdrawal.
-- [ ] Test switching Sheet A→B, disabling, and reconnecting while a job is running. A's pending changes and causal state cannot publish to B or be acknowledged by B's job. Establish a new destination's baseline through reviewed initialization/migration.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_sync_persistence.py tests/unit/test_google_sync_service.py -q`.
-- [ ] Stop unsafe V1 publication with a visible upgrade-required state; local tracking remains available. Add durable changes, publication acknowledgements, causal heads, conflicts, and migration state in a versioned migration. Capture mutations with their outbox changes in the same transaction; never hold that transaction during network work.
-- [ ] Define the contracts above and document data kinds, schema, active eligibility, deletion retention, and Undo semantics in `docs/google-sync-v2.md`. Keep existing numeric revisions for history/display only. Do not sync machine credentials or local operational settings.
-- [ ] Re-run and gate; verify migration of a copy of an existing database preserves all tracking/settings/audit rows.
+- [x] Add failure-injection tests: record update or outbox insertion failure rolls back both. Persist two successive offline edits with correct causal parents and retain them through restart.
+- [x] Test completed work, deductions, day details, assignments, deletions, history restores, and configuration opt-out. An ended lunch with active parent creates no publishable orphan.
+- [x] Test Finish → sync request within 30-second Undo window → Undo, including restart before the deadline. Persist the publication grace deadline and attempted-publication state. Test accepted append → lost response → reopen: a possibly published completion cannot be treated as never published. Persist a compensating withdrawal with local Undo; sync verifies/retries the completion before publishing its withdrawal. Active state remains local and Undo needs no network call. Completing again descends from the withdrawal.
+- [x] Test switching Sheet A→B, disabling, and reconnecting while a job is running. A's pending changes and causal state cannot publish to B or be acknowledged by B's job. Establish a new destination's baseline through reviewed initialization/migration.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_sync_persistence.py tests/unit/test_google_sync_service.py -q`.
+- [x] Stop unsafe V1 publication with a visible upgrade-required state; local tracking remains available. Add durable changes, publication acknowledgements, causal heads, conflicts, and migration state in a versioned migration. Capture mutations with their outbox changes in the same transaction; never hold that transaction during network work.
+- [x] Define the contracts above and document data kinds, schema, active eligibility, deletion retention, and Undo semantics in `docs/google-sync-v2.md`. Keep existing numeric revisions for history/display only. Do not sync machine credentials or local operational settings.
+- [x] Re-run and gate; verify migration of a copy of an existing database preserves all tracking/settings/audit rows.
 
 ### Task 8: Append and verify immutable changes — A01
 
 **Files:** Modify `src/qi_flow/infrastructure/google_sheets_sync.py`, `src/qi_flow/application/google_sync_service.py`; extend `tests/unit/test_google_sync.py`; create `tests/integration/test_sync_transport.py`.
 
-- [ ] Make two clients read the same log and publish independent changes in either interleaving. Assert the remote and both clients converge to the union.
-- [ ] Simulate append accepted → response timeout → restart → same-ID retry. Assert one logical change after deduplication, pending acknowledgement until content is read back, and no destruction of existing rows.
-- [ ] Cover request rejection, identical duplicate rows, conflicting duplicate IDs, concurrent tab creation/log-identity disagreement, unsupported schema, quota/capacity failure, and strings beginning with `=`. Assert preserved tabs/formulas and no formula interpretation of payloads.
-- [ ] Change configuration after append starts but before its result. Verify against the original target and leave the new target's state untouched; never redirect an uncertain retry to another sheet.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_sync.py tests/integration/test_sync_transport.py -q`.
-- [ ] Implement server-side append of complete groups; read back IDs plus canonical content before acknowledging their exact pending IDs. Retry with the original IDs. A local edit made during publication stays pending and cannot be acknowledged by the older job.
-- [ ] Re-run and gate. Remove snapshot replacement from V2 paths, and retain V1 reads only for Task 10 migration.
+- [x] Make two clients read the same log and publish independent changes in either interleaving. Assert the remote and both clients converge to the union.
+- [x] Simulate append accepted → response timeout → restart → same-ID retry. Assert one logical change after deduplication, pending acknowledgement until content is read back, and no destruction of existing rows.
+- [x] Cover request rejection, identical duplicate rows, conflicting duplicate IDs, concurrent tab creation/log-identity disagreement, unsupported schema, quota/capacity failure, and strings beginning with `=`. Assert preserved tabs/formulas and no formula interpretation of payloads.
+- [x] Change configuration after append starts but before its result. Verify against the original target and leave the new target's state untouched; never redirect an uncertain retry to another sheet.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_sync.py tests/integration/test_sync_transport.py -q`.
+- [x] Implement server-side append of complete groups; read back IDs plus canonical content before acknowledging their exact pending IDs. Retry with the original IDs. A local edit made during publication stays pending and cannot be acknowledged by the older job.
+- [x] Re-run and gate. Remove snapshot replacement from V2 paths, and retain V1 reads only for Task 10 migration.
 
 ### Task 9: Reconcile causally and validate imports — A02–A04
 
@@ -207,27 +211,27 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 - [x] Build candidate heads by ancestry, stage missing/invalid input, and materialize complete valid aggregates using Task 2 validation and short SQLite transactions. Keep all competing changes and tombstones beyond audit expiry. Backup restore enters reconciliation before any new shared publication.
 - [x] Re-run and gate under US29, including preservation of stable IDs and assignment/day-detail coverage.
 
-### Task 10: Migrate all participating legacy histories deliberately — proposed US46
+### Task 10: Migrate all participating legacy histories deliberately — US46
 
-**Files:** Create `src/qi_flow/application/sync_migration.py`, `src/qi_flow/ui/sync_migration_dialog.py`, `tests/integration/test_sync_migration.py`, `tests/ui/test_sync_migration.py`; modify `src/qi_flow/infrastructure/google_sheets_sync.py`, `src/qi_flow/bootstrap.py`, `docs/google-sync-v2.md`.
+**Files:** Create `src/qi_flow/application/sync_migration.py`, `src/qi_flow/ui/sync_migration_dialog.py`, `tests/integration/test_sync_migration.py`, `tests/ui/test_sync_migration_dialog.py`; modify `src/qi_flow/infrastructure/google_sheets_sync.py`, `src/qi_flow/bootstrap.py`, `docs/google-sync-v2.md`.
 
-- [ ] Test remote V1 plus two nonempty divergent local snapshots, identical seeds, empty machines, unknown legacy variants, conflicting deletions, interruption/retry, and a crash before completion marker. Assert original snapshots remain recoverable and no revision-based winner is chosen.
-- [ ] Test V1 mutation after migration and concurrent V2 tab initialization. Assert publication pauses for renewed legacy writes and unrelated workbook content remains intact.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_sync_migration.py tests/ui/test_sync_migration.py -q`.
-- [ ] Require an explicit participant roster and all-machines pause/upgrade workflow. Create verified local safety copies and an immutable copy of the original remote snapshot; preserve the V1 tab too. Import every participant's snapshot, deduplicate identical canonical seeds, and retain divergent variants as conflicts. Stable deterministic seed IDs make retries idempotent.
-- [ ] Permit only idempotent migration-seed appends before cutover. Record the frozen V1 fingerprint and a completion manifest with verified participant snapshot acknowledgements; verify all seed groups before enabling ordinary V2 publication. Fingerprint checks detect renewed legacy writes when observed and cannot atomically fence old clients. Older snapshot writers cannot participate safely, so do not promise transparent mixed-version compatibility.
-- [ ] Re-run and gate. Record the cutover decision when implemented; leave automatic sync disabled until completion is verified.
+- [x] Test remote V1 plus two nonempty divergent local snapshots, identical seeds, empty machines, unknown legacy variants, conflicting deletions, interruption/retry, and a crash before completion marker. Assert original snapshots remain recoverable and no revision-based winner is chosen.
+- [x] Test V1 mutation after migration and concurrent V2 tab initialization. Assert publication pauses for renewed legacy writes and unrelated workbook content remains intact.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/integration/test_sync_migration.py tests/ui/test_sync_migration.py -q`.
+- [x] Require an explicit participant roster and all-machines pause/upgrade workflow. Create verified local safety copies and an immutable copy of the original remote snapshot; preserve the V1 tab too. Import every participant's snapshot, deduplicate identical canonical seeds, and retain divergent variants as conflicts. Stable deterministic seed IDs make retries idempotent.
+- [x] Permit only idempotent migration-seed appends before cutover. Record the frozen V1 fingerprint and a completion manifest with verified participant snapshot acknowledgements; verify all seed groups before enabling ordinary V2 publication. Fingerprint checks detect renewed legacy writes when observed and cannot atomically fence old clients. Older snapshot writers cannot participate safely, so do not promise transparent mixed-version compatibility.
+- [x] Re-run and gate. Record the cutover decision when implemented; leave automatic sync disabled until completion is verified.
 
 ### Task 11: Expose durable conflicts and truthful status — US28–US29
 
 **Files:** Create `src/qi_flow/ui/sync_conflict_dialog.py`, `tests/ui/test_google_sync_ui.py`; modify `src/qi_flow/application/google_sync_service.py`, `src/qi_flow/application/dto.py`, `src/qi_flow/ui/settings_page.py`, `src/qi_flow/bootstrap.py`; extend `tests/integration/test_sync_reconciliation.py`.
 
-- [ ] Test local/remote/base presentation, explicit valid resolution, cancel, restart with unresolved conflicts, edit/delete conflict, and aggregate overlap requiring correction or deletion. No conflict choice is preselected.
-- [ ] Race a third writer with an already-open conflict review. Assert resolution references reviewed heads and the third version remains visible as a new conflict. Also edit locally after opening review: recheck local heads/aggregate within the resolution transaction and require a fresh review rather than overwrite the newer local edit.
-- [ ] Test pending, offline, authorization-required, cancelled, invalid-data, conflict, and confirmed-sync states. Last-success time changes only after verified publication/import; display it in Copenhagen time.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_google_sync_ui.py tests/integration/test_sync_reconciliation.py -q`.
-- [ ] Implement `resolve` through Task 2 validation and the durable change/outbox boundary. Wire services in bootstrap and inject application ports into Settings; remove access to the tracking service's private `_uow_factory`.
-- [ ] Re-run and gate against existing US28–US29 conflict/status criteria.
+- [x] Test local/remote/base presentation, explicit valid resolution, cancel, restart with unresolved conflicts, edit/delete conflict, and aggregate overlap requiring correction or deletion. No conflict choice is preselected.
+- [x] Race a third writer with an already-open conflict review. Assert resolution references reviewed heads and the third version remains visible as a new conflict. Also edit locally after opening review: recheck local heads/aggregate within the resolution transaction and require a fresh review rather than overwrite the newer local edit.
+- [x] Test pending, offline, authorization-required, cancelled, invalid-data, conflict, and confirmed-sync states. Last-success time changes only after verified publication/import; display it in Copenhagen time.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_google_sync_ui.py tests/integration/test_sync_reconciliation.py -q`.
+- [x] Implement `resolve` through Task 2 validation and the durable change/outbox boundary. Wire services in bootstrap and inject application ports into Settings; remove access to the tracking service's private `_uow_factory`.
+- [x] Re-run and gate against existing US28–US29 conflict/status criteria.
 
 ### Task 12: Make Google authorization bounded and cancellable — A10
 
@@ -235,21 +239,21 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Contract:** Define an application `GoogleAuthorization` port with `authorize(*, cancelled: Callable[[], bool], timeout_seconds: float) -> None`. The infrastructure adapter owns callback-server polling/cleanup; a UI controller owns the managed worker. Default authorization deadline: 120 seconds.
 
-- [ ] Test no callback, browser abandonment, cancellation, successful callback, credential-store failure, and window close during authorization. Assert callback port/server cleanup and no persisted partial credentials.
-- [ ] Use a blocked fake authorization port in Qt tests; timer commands and event processing must still succeed, duplicate authorization is disabled, and completion/error reaches the main thread once.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_oauth.py tests/ui/test_google_sync_ui.py tests/unit/test_logging_privacy.py -q`.
-- [ ] Move authorization off the UI thread. Use short callback waits that check cancellation/deadline; bound HTTP/token exchange and release the callback server in `finally`. Store credentials only after successful authorization, preserve existing valid credentials on failed reauthorization, and never terminate QThread forcibly.
-- [ ] Re-run and gate. Cancelled/expired authorization is visible without blocking ordinary tracking or exit.
+- [x] Test no callback, browser abandonment, cancellation, successful callback, credential-store failure, and window close during authorization. Assert callback port/server cleanup and no persisted partial credentials.
+- [x] Use a blocked fake authorization port in Qt tests; timer commands and event processing must still succeed, duplicate authorization is disabled, and completion/error reaches the main thread once.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_google_oauth.py tests/ui/test_google_sync_ui.py tests/unit/test_logging_privacy.py -q`.
+- [x] Move authorization off the UI thread. Use short callback waits that check cancellation/deadline; bound HTTP/token exchange and release the callback server in `finally`. Store credentials only after successful authorization, preserve existing valid credentials on failed reauthorization, and never terminate QThread forcibly.
+- [x] Re-run and gate. Cancelled/expired authorization is visible without blocking ordinary tracking or exit.
 
 ### Task 13: Add coalesced automatic sync after the protocol passes — US29
 
 **Files:** Create `src/qi_flow/application/sync_schedule.py`, `tests/unit/test_sync_schedule.py`; modify `src/qi_flow/ui/google_sync_controller.py`, `src/qi_flow/bootstrap.py`; extend `tests/ui/test_google_sync_ui.py`, `tests/integration/test_sync_transport.py`.
 
-- [ ] With an injected clock test opening, eligible local commit, five-minute periodic checks, coalesced requests, offline retries, cancellation, resume, and disable/disconnect. Assert one job runs at a time and no jobs start before verified migration.
-- [ ] Test edits during an in-flight job, HTTP timeout/429 with Retry-After, target/configuration change, restart, and best-effort closing. Assert pending changes survive failed/cancelled shutdown, old workers cannot update the new connection's status, and no database connection crosses threads.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_sync_schedule.py tests/ui/test_google_sync_ui.py tests/integration/test_sync_transport.py -q`.
-- [ ] Schedule only completed eligible changes after Task 7's Undo grace period. Use bounded HTTP operations, exponential backoff capped at five minutes (honor a longer server Retry-After), and cooperative cancellation. Closing allows at most five seconds of best-effort sync; do not begin an operation whose bounded cleanup cannot finish within the remaining close budget. Preserve durable pending work on exit.
-- [ ] Re-run and gate. Verify no network operation holds a SQLite transaction and no authorization prompt opens automatically during tracking.
+- [x] With an injected clock test opening, eligible local commit, five-minute periodic checks, coalesced requests, offline retries, cancellation, resume, and disable/disconnect. Assert one job runs at a time and no jobs start before verified migration.
+- [x] Test edits during an in-flight job, HTTP timeout/429 with Retry-After, target/configuration change, restart, and best-effort closing. Assert pending changes survive failed/cancelled shutdown, old workers cannot update the new connection's status, and no database connection crosses threads.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_sync_schedule.py tests/ui/test_google_sync_ui.py tests/integration/test_sync_transport.py -q`.
+- [x] Schedule only completed eligible changes after Task 7's Undo grace period. Use bounded HTTP operations, exponential backoff capped at five minutes (honor a longer server Retry-After), and cooperative cancellation. Closing allows at most five seconds of best-effort sync; do not begin an operation whose bounded cleanup cannot finish within the remaining close budget. Preserve durable pending work on exit.
+- [x] Re-run and gate. Verify no network operation holds a SQLite transaction and no authorization prompt opens automatically during tracking.
 
 ## Phase 3: Complete the accepted DSB filtering story
 
@@ -257,11 +261,11 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Files:** Modify `src/qi_flow/application/dsb.py`, `src/qi_flow/application/dto.py`, `src/qi_flow/ui/settings_page.py`, `src/qi_flow/ui/testhuset_dialog.py`; extend `tests/unit/test_dsb_service.py`, `tests/ui/test_settings_preferences.py`, `tests/ui/test_testhuset_ui.py`.
 
-- [ ] Add sessions assigned to included, excluded, overridden, and unresolved branches. Assert only included completed sessions contribute DSB net hours; ordinary and Testhuset totals are unchanged.
-- [ ] Test empty allowlist, historical sessions resolving the current default, deductions, rounding after aggregation, and allowlist change between preview and fill. Assert changed configuration invalidates the prepared review even if rounded totals happen to match.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_dsb_service.py tests/ui/test_settings_preferences.py tests/ui/test_testhuset_ui.py -q`.
-- [ ] Store user-chosen stable task IDs from the scanned cache; infer none from names. Include an allowlist/configuration version in the review token. Show included/excluded totals with inspection by date/branch; prevent fill when no branch is included.
-- [ ] Re-run and gate against every US31 acceptance criterion. No new story is needed.
+- [x] Add sessions assigned to included, excluded, overridden, and unresolved branches. Assert only included completed sessions contribute DSB net hours; ordinary and Testhuset totals are unchanged.
+- [x] Test empty allowlist, historical sessions resolving the current default, deductions, rounding after aggregation, and allowlist change between preview and fill. Assert changed configuration invalidates the prepared review even if rounded totals happen to match.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_dsb_service.py tests/ui/test_settings_preferences.py tests/ui/test_testhuset_ui.py -q`.
+- [x] Store user-chosen stable task IDs from the scanned cache; infer none from names. Include an allowlist/configuration version in the review token. Show included/excluded totals with inspection by date/branch; prevent fill when no branch is included.
+- [x] Re-run and gate against every US31 acceptance criterion. No new story is needed.
 
 ## Phase 4: Correct calendar and unattended behavior
 
@@ -278,7 +282,7 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 - [x] Reuse the calendar helper for detail queries and export bounds; clip before emitting daily fragments. Do not assume 86,400 elapsed seconds for a local date.
 - [x] Re-run and gate; document split detailed rows under US17 and use the helper in Task 16.
 
-### Task 16: Fix parent dates and add explicit overnight correction — A16, proposed US44
+### Task 16: Fix parent dates and add explicit overnight correction — A16, US44
 
 **Files:** Modify `src/qi_flow/ui/manual_entry_dialog.py`, `src/qi_flow/ui/session_editor_dialog.py`, `src/qi_flow/ui/timesheet_page.py`; create `src/qi_flow/ui/date_time_input.py`, `tests/ui/test_overnight_editing.py`; extend `tests/ui/test_compact_follow_up.py`; create `tests/integration/test_overnight_edits.py`.
 
@@ -287,7 +291,7 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 - [x] Test dirty row changes/close with Save/Discard/Cancel and failed Save. Cancel retains both input and selection; choosing a different parent does not silently move existing endpoints.
 - [x] Test nonexistent 29 March 02:30 and both occurrences of 25 October 02:30. Reject the former; explicitly choose the earlier/later UTC occurrence for the latter. Test future actual timestamps and invalid order/containment.
 - [x] Run `.\.venv\Scripts\python.exe -m pytest tests/ui/test_overnight_editing.py tests/ui/test_compact_follow_up.py tests/integration/test_overnight_edits.py -q`.
-- [x] Repair the existing parent-date bug as its own small commit, then add the proposed US44 interaction. Use visible date/time controls and an explicit repeated-hour occurrence choice; preserve exact-minute manual semantics and Task 2 validation. Never use automatic midnight rollover inference for edited endpoints.
+- [x] Repair the existing parent-date bug as its own small commit, then add the US44 interaction. Use visible date/time controls and an explicit repeated-hour occurrence choice; preserve exact-minute manual semantics and Task 2 validation. Never use automatic midnight rollover inference for edited endpoints.
 - [x] Re-run and gate; record the new endpoint-date/DST interaction decision when US44 is implemented.
 
 ### Task 17: Scope lunch reminders to each deduction — A15
@@ -306,11 +310,11 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Contract:** A pure `BackupSchedule(clock: Clock, destination: Callable[[], str])` consumes a normalized destination identity. `due() -> bool` and `record_attempt(destination: str, work_date: date, *, succeeded: bool) -> None` schedule startup/day-change checks and failed-attempt retries. Capture the destination/date when starting each job so that completion cannot mark a different folder or day successful. The Qt composition timer polls once per minute; retry is at most once per 15 minutes.
 
-- [ ] Advance the clock across midnight without restart and assert one successful daily backup per destination/day. A failed attempt retries after 15 minutes, preserves the visible warning, and a later success clears it.
-- [ ] Change the folder after today's success and assert the new folder receives a backup. Cover sleep/resume, inaccessible destination, bounded/coalesced workers, clean shutdown, valid SQLite contents, active state, and retention of the latest 30 daily backups.
-- [ ] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_backup_schedule.py tests/integration/test_backups_and_exports.py -q`.
-- [ ] Execute backup copies off the UI thread with a worker-owned SQLite connection; schedule without changing timer transactions. Re-evaluate on folder changes and resume, and do not run overlapping backup jobs.
-- [ ] Re-run and gate under US15. Keep backup restore safety copies and existing explicit confirmation behavior.
+- [x] Advance the clock across midnight without restart and assert one successful daily backup per destination/day. A failed attempt retries after 15 minutes, preserves the visible warning, and a later success clears it.
+- [x] Change the folder after today's success and assert the new folder receives a backup. Cover sleep/resume, inaccessible destination, bounded/coalesced workers, clean shutdown, valid SQLite contents, active state, and retention of the latest 30 daily backups.
+- [x] Run `.\.venv\Scripts\python.exe -m pytest tests/unit/test_backup_schedule.py tests/integration/test_backups_and_exports.py -q`.
+- [x] Execute backup copies off the UI thread with a worker-owned SQLite connection; schedule without changing timer transactions. Re-evaluate on folder changes and resume, and do not run overlapping backup jobs.
+- [x] Re-run and gate under US15. Keep backup restore safety copies and existing explicit confirmation behavior.
 
 ## Phase 5: Improve maintainability at the repaired boundaries
 
@@ -318,12 +322,12 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Files:** Modify `tests/unit/test_architecture.py`, `src/qi_flow/bootstrap.py`, `src/qi_flow/application/time_tracking.py`, `src/qi_flow/ui/settings_page.py`, `scripts/check.ps1`, `pyproject.toml`, `.github/workflows/prerelease.yml`; create `.github/workflows/check.yml`, `scripts/check-core.ps1`, `pytest-core.ini`, `requirements/windows-build.txt`, and focused modules only for responsibilities actually extracted.
 
-- [ ] Extend architecture checks recursively: domain stdlib only; application imports no infrastructure/UI/Qt; infrastructure imports no UI; widgets contain no SQL/private repository access. Handle relative imports and nested modules.
-- [ ] Add `scripts/check-core.ps1` to run a minimal environment containing pytest/tzdata and QI Flow installed without runtime dependencies. Use `pytest-core.ini` without Qt configuration and an explicit selection of pure domain/application test modules, including the new validation/scheduling/service tests. Disable plugin autoload so the full environment's Qt plugin cannot mask this check. No PySide6/Playwright/Google libraries are installed; separate external-adapter tests from this selection.
-- [ ] Inject backup/export/update/integration boundaries from bootstrap. Extract aggregate validation, sync reconciliation/scheduling, and focused Settings integration controllers already justified by these tasks. Keep the public tracking service stable and avoid a broad rewrite of unrelated screens.
-- [ ] Add PR/push Windows CI running the documented quality gate with pinned tested dependencies and Edge fixtures; retain manual prerelease workflow. Extend lint/format checks to maintained release/updater scripts and verify CI does not rely on uncommitted `.venv` contents or credentials.
-- [ ] Profile Today refresh and backup-list integrity scans against representative long history. Record query counts and timings before deciding to optimize; cache only derived results with tested invalidation on edits/restore/day changes if measured work is excessive.
-- [ ] Run `.\scripts\check.ps1`, `.\scripts\check-core.ps1`, `.\.venv\Scripts\python.exe -m pip check`, and a clean CI-equivalent environment. Require successful boundary checks and no behavior regressions; document any measured optimization separately.
+- [x] Extend architecture checks recursively: domain stdlib only; application imports no infrastructure/UI/Qt; infrastructure imports no UI; widgets contain no SQL/private repository access. Handle relative imports and nested modules.
+- [x] Add `scripts/check-core.ps1` to run a minimal environment containing pytest/tzdata and QI Flow installed without runtime dependencies. Use `pytest-core.ini` without Qt configuration and an explicit selection of pure domain/application test modules, including the new validation/scheduling/service tests. Disable plugin autoload so the full environment's Qt plugin cannot mask this check. No PySide6/Playwright/Google libraries are installed; separate external-adapter tests from this selection.
+- [x] Inject backup/export/update/integration boundaries from bootstrap. Extract aggregate validation, sync reconciliation/scheduling, and focused Settings integration controllers already justified by these tasks. Keep the public tracking service stable and avoid a broad rewrite of unrelated screens.
+- [x] Add PR/push Windows CI running the documented quality gate with pinned tested dependencies and Edge fixtures; retain manual prerelease workflow. Extend lint/format checks to maintained release/updater scripts and verify CI does not rely on uncommitted `.venv` contents or credentials.
+- [x] Profile Today refresh and backup-list integrity scans against representative long history. Record query counts and timings before deciding to optimize; cache only derived results with tested invalidation on edits/restore/day changes if measured work is excessive.
+- [x] Run `.\scripts\check.ps1`, `.\scripts\check-core.ps1`, `.\.venv\Scripts\python.exe -m pip check`, and a clean CI-equivalent environment. Require successful boundary checks and no behavior regressions; document any measured optimization separately.
 
 ## Phase 6: Verify release behavior and reconcile documentation
 
@@ -331,12 +335,12 @@ Do not clear/replace either shared tab, allocate a destination row from a client
 
 **Files:** Update `REQUIREMENTS.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `README.md`, `USER_STORIES.md`, `USER_STORIES_ARCHIVE.md`, and add dated evidence under `docs/release-checks/`.
 
-- [ ] Run `.\scripts\check.ps1` from PowerShell after all integrated changes. Record formatter/lint/type/test results, the final commit, migration versions, and dependency consistency.
+- [x] Run `.\scripts\check.ps1` from PowerShell after all integrated changes. Record formatter/lint/type/test results, the final commit, migration versions, and dependency consistency.
 - [ ] On a clean Windows account, test per-user install, launch, optional startup, simultaneous launch, Start → Lunch → End lunch → Finish → edit → restart → export, uninstall, and data retention/removal choices. Verify crash, previous-day recovery, sleep decisions, backup/restore, corrupted database handling, and new migration rollback-on-failure.
 - [ ] Test the packaged updater with verified package, preflight refusal and preexisting recovery, successful swap/relaunch, interrupted replacement, rollback, uninstall preservation, and retained database/settings/backups.
 - [ ] Against a disposable Google workbook and two isolated clients, verify real append interleaving, accepted-write/response-loss recovery, conflicts, V1 cutover, deletion/restore, and preservation of unrelated tabs/formulas. Do not use a user's working sheet for fault injection.
 - [ ] Record authorized live Testhuset and DSB reviewed-fill evidence: selected ISO week/year, exact task/allocation, explicit differing-row decisions, only confirmed hours, verified save/DSB Send, and no week closure/approval/locking. Live writes require the user's explicit instruction for the concrete reviewed values; automated fixtures can run without it.
-- [ ] Refresh stale implementation claims and document the new lock, sync protocol, worker ownership, calendar export, and overnight editor behavior. Move a story to the archive only after its criteria and required smoke checks pass; keep blocked release checks visibly open.
+- [x] Refresh stale implementation claims and document the new lock, sync protocol, worker ownership, calendar export, and overnight editor behavior. Move a story to the archive only after its criteria and required smoke checks pass; keep blocked release checks visibly open.
 
 ## Completion criteria
 

@@ -35,7 +35,7 @@ class OAuth:
     def is_authorized(self) -> bool:
         return self.authorized
 
-    def authorize(self) -> None:
+    def authorize(self, *, cancelled, timeout_seconds) -> None:
         self.authorized = True
 
     def disconnect(self) -> None:
@@ -100,7 +100,7 @@ def test_each_settings_group_has_at_most_one_button(qtbot, rig) -> None:
     open_section(page, "Google Sheets")
     assert not oauth.authorized
     page._google_auth_button.click()
-    assert oauth.authorized
+    qtbot.waitUntil(lambda: oauth.authorized and not page._google_controller.busy)
     assert page._google_auth_button.text() == "Disconnect this computer"
     page._google_auth_button.click()
     assert not oauth.authorized

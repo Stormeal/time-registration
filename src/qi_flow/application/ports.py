@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from types import TracebackType
 from typing import Any, Protocol, Self
@@ -30,6 +30,20 @@ class Clock(Protocol):
     """Source of timezone-aware UTC instants."""
 
     def now(self) -> datetime: ...
+
+
+class GoogleAuthorization(Protocol):
+    def authorize(self, *, cancelled: Callable[[], bool], timeout_seconds: float) -> None: ...
+
+
+class GoogleConnection(GoogleAuthorization, Protocol):
+    def is_authorized(self) -> bool: ...
+
+    def save_client_json(self, content: str) -> str: ...
+
+    def save_client(self, client_id: str, client_secret: str) -> None: ...
+
+    def disconnect(self) -> None: ...
 
 
 class IdentifierGenerator(Protocol):

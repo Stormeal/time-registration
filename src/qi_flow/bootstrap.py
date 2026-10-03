@@ -7,7 +7,9 @@ import logging
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from importlib.resources import files
 from pathlib import Path
@@ -18,25 +20,34 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from qi_flow import __version__
 from qi_flow.application.dsb import DsbService
-from qi_flow.application.google_sync import GoogleSyncSettings
+from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
+from qi_flow.application.google_sync_service import (
+    SyncService,
+)
+from qi_flow.application.sync_actions import GoogleSyncActions
+from qi_flow.application.sync_migration import SyncMigration
+from qi_flow.application.sync_models import SyncTarget
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
 from qi_flow.infrastructure.dsb_browser import temporary_sheet as temporary_dsb_sheet
 from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
+from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.logging import configure_logging
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.single_instance import SingleInstanceGuard
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
 from qi_flow.infrastructure.startup import START_MINIMIZED_FLAG, create_startup_manager
+from qi_flow.infrastructure.sync_migration_backup import SQLiteMigrationSafety
 from qi_flow.infrastructure.system import SystemClock, UuidIdentifierGenerator
 from qi_flow.infrastructure.testhuset_browser import temporary_sheet
 from qi_flow.infrastructure.testhuset_cache import JsonTaskCache
 from qi_flow.infrastructure.testhuset_credentials import WindowsCredentialStore
 from qi_flow.infrastructure.updates import ReleaseClient
 from qi_flow.ui.exit_dialog import ExitCoordinator
+from qi_flow.ui.google_sync_controller import GoogleSyncController
 from qi_flow.ui.main_window import MainWindow
 from qi_flow.ui.tray import TrayController
 
@@ -166,6 +177,49 @@ def run(argv: list[str] | None = None) -> int:
         UuidIdentifierGenerator(),
         JsonTaskCache(context.paths.data_dir / "dsb-allocations.json"),
     )
+    google_controller = GoogleSyncController(app)
+    google_settings = GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock())
+    google_oauth = GoogleOAuthStore()
+
+    def sync_factory(
+        configuration: GoogleSyncConfiguration,
+        target: SyncTarget,
+        generation: int,
+        cancelled: Callable[[], bool],
+    ) -> SyncService:
+        return SyncService(
+            lambda: SQLiteUnitOfWork(context.database),
+            GoogleSheetsSync(configuration, google_oauth, target=target, cancelled=cancelled),
+            target,
+            SystemClock(),
+            UuidIdentifierGenerator(),
+            generation=generation,
+        )
+
+    def migration_factory(
+        configuration: GoogleSyncConfiguration, generation: int, cancelled: Callable[[], bool]
+    ) -> SyncMigration:
+        clock = SystemClock()
+        return SyncMigration(
+            lambda: SQLiteUnitOfWork(context.database),
+            GoogleSheetsSync(configuration, google_oauth, cancelled=cancelled),
+            SQLiteMigrationSafety(context.database, context.paths.backup_dir),
+            clock,
+            UuidIdentifierGenerator(),
+            generation=generation,
+            cancelled=cancelled,
+            deadline=clock.now() + timedelta(minutes=2),
+        )
+
+    sync_actions = GoogleSyncActions(
+        lambda: SQLiteUnitOfWork(context.database),
+        google_settings,
+        google_oauth,
+        SystemClock(),
+        sync_factory,
+        migration_factory,
+    )
+
     window = MainWindow(
         service,
         backups,
@@ -182,9 +236,11 @@ def run(argv: list[str] | None = None) -> int:
         credentials,
         dsb,
         temporary_dsb_sheet,
-        GoogleSyncSettings(lambda: SQLiteUnitOfWork(context.database), SystemClock()),
-        GoogleOAuthStore(),
+        google_settings,
+        google_oauth,
         ReleaseClient(),
+        google_controller,
+        sync_actions=sync_actions,
     )
     guard.focus_requested.connect(window.reveal)
 
@@ -192,7 +248,13 @@ def run(argv: list[str] | None = None) -> int:
     app.setWindowIcon(icon)
 
     exit_coordinator = ExitCoordinator(service, window)
-    exit_coordinator.exit_confirmed.connect(app.quit)
+
+    def finish_exit() -> None:
+        window.allow_exit()
+        app.quit()
+
+    google_controller.ready_for_shutdown.connect(finish_exit)
+    exit_coordinator.exit_confirmed.connect(google_controller.begin_shutdown)
     window.close_app_requested.connect(exit_coordinator.request_exit)
 
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -226,6 +288,7 @@ def run(argv: list[str] | None = None) -> int:
             "setup.",
         )
     exit_code = app.exec()
+    google_controller.wait_for_shutdown()
     if tray is not None:
         tray.hide()
     guard.release()

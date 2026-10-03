@@ -181,3 +181,267 @@ def test_corrected_explicit_dates_emit_manual_exact_minute_bounds(qtbot):
     assert corrected["actual_ended_at"] == "2026-10-02T08:00:00+00:00"
     assert corrected["effective_ended_at"] == corrected["actual_ended_at"]
     assert corrected["source"] == "manual"
+
+
+def test_authorization_worker_keeps_tracking_responsive_and_rejects_duplicates(qtbot, rig):
+    import threading
+
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    from qi_flow.application.dto import FinishWorkCommand, StartWorkCommand
+
+    module = importlib.import_module("qi_flow.ui.google_sync_controller")
+    started, release = threading.Event(), threading.Event()
+
+    class Authorization:
+        def authorize(self, *, cancelled, timeout_seconds):
+            assert timeout_seconds == 120
+            started.set()
+            while not release.wait(0.01):
+                if cancelled():
+                    from qi_flow.application.sync_models import SyncJobCancelledError
+
+                    raise SyncJobCancelledError("Cancelled")
+
+    controller = module.GoogleSyncController()
+    deliveries = []
+    controller.completed.connect(
+        lambda kind, value: deliveries.append((kind, QThread.currentThread()))
+    )
+    assert controller.authorize(Authorization())
+    qtbot.waitUntil(started.is_set)
+    assert not controller.authorize(Authorization())
+    rig.service.start_work(StartWorkCommand())
+    assert rig.service.active_state().session_id is not None
+    from datetime import timedelta
+
+    rig.clock.value += timedelta(minutes=1)
+    rig.service.finish_work(FinishWorkCommand())
+    release.set()
+    qtbot.waitUntil(lambda: not controller.busy)
+    assert len(deliveries) == 1
+    assert deliveries[0] == ("authorize", QApplication.instance().thread())
+
+
+def test_shutdown_cancels_authorization_waits_for_worker_and_discards_late_result(qtbot):
+    import threading
+
+    module = importlib.import_module("qi_flow.ui.google_sync_controller")
+    started = threading.Event()
+    controller = module.GoogleSyncController()
+    deliveries = []
+    controller.completed.connect(lambda *args: deliveries.append(args))
+
+    def operation(cancelled):
+        started.set()
+        while not cancelled():
+            threading.Event().wait(0.01)
+        return "late success"
+
+    assert controller.start("sync", operation)
+    qtbot.waitUntil(started.is_set)
+    with qtbot.waitSignal(controller.ready_for_shutdown):
+        controller.begin_shutdown()
+    assert not controller.busy
+    assert deliveries == []
+    assert not controller.start("sync", operation)
+
+
+def test_cancelled_operation_reports_once_on_main_thread(qtbot):
+    import threading
+
+    module = importlib.import_module("qi_flow.ui.google_sync_controller")
+    controller = module.GoogleSyncController()
+    started = threading.Event()
+    failures = []
+    controller.failed.connect(lambda *args: failures.append(args))
+
+    def operation(cancelled):
+        started.set()
+        while not cancelled():
+            threading.Event().wait(0.01)
+
+    assert controller.start("sync", operation)
+    qtbot.waitUntil(started.is_set)
+    controller.cancel()
+    qtbot.waitUntil(lambda: not controller.busy)
+    assert len(failures) == 1
+    assert failures[0][0] == "sync"
+
+
+def test_settings_authorization_is_cancellable_while_tracking_remains_available(qtbot, rig):
+    import threading
+
+    from qi_flow.application.dto import StartWorkCommand
+    from qi_flow.application.google_sync import GoogleSyncSettings
+    from qi_flow.application.sync_models import SyncJobCancelledError
+    from qi_flow.ui.settings_page import SettingsPage
+
+    started = threading.Event()
+
+    class OAuth:
+        def is_authorized(self):
+            return False
+
+        def authorize(self, *, cancelled, timeout_seconds):
+            started.set()
+            while not cancelled():
+                threading.Event().wait(0.01)
+            raise SyncJobCancelledError("Google authorization cancelled")
+
+    page = SettingsPage(
+        *rig.window_args, google_sync=GoogleSyncSettings(rig.uow, rig.clock), google_oauth=OAuth()
+    )
+    qtbot.addWidget(page)
+    page._google_auth_button.click()
+    qtbot.waitUntil(started.is_set)
+    assert not page._google_auth_button.isEnabled()
+    rig.service.start_work(StartWorkCommand())
+    assert rig.service.active_state().session_id is not None
+    page._google_cancel.click()
+    qtbot.waitUntil(lambda: not page._google_controller.busy)
+    assert "cancelled" in page._authorization_status.text()
+    assert page._google_auth_button.isEnabled()
+
+
+def test_settings_shows_pending_counts_and_retained_success_in_copenhagen(qtbot, rig):
+    from qi_flow.application.google_sync import GoogleSyncSettings
+    from qi_flow.application.google_sync_service import SyncResult
+    from qi_flow.ui.settings_page import SettingsPage
+
+    class OAuth:
+        def is_authorized(self):
+            return False
+
+    page = SettingsPage(
+        *rig.window_args, google_sync=GoogleSyncSettings(rig.uow, rig.clock), google_oauth=OAuth()
+    )
+    qtbot.addWidget(page)
+    page._sync_completed(SyncResult(2, 1, datetime(2026, 10, 3, 12, tzinfo=UTC), "conflict"))
+    assert "2 pending" in page._sync_status.text()
+    assert "1 conflicts" in page._sync_status.text()
+    assert "14:00 CEST" in page._sync_status.text()
+
+
+def test_settings_guided_migration_uses_injected_application_actions(qtbot, rig):
+    from qi_flow.application.dto import SyncStatusView
+    from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
+    from qi_flow.application.sync_migration import MigrationPlan, MigrationStatus
+    from qi_flow.application.sync_models import SyncTarget
+    from qi_flow.ui.settings_page import SettingsPage
+
+    settings = GoogleSyncSettings(rig.uow, rig.clock)
+    settings.save(
+        GoogleSyncConfiguration(
+            "https://docs.google.com/spreadsheets/d/sheet/edit", "test.apps.googleusercontent.com"
+        )
+    )
+
+    class OAuth:
+        def is_authorized(self):
+            return True
+
+    class Actions:
+        def status(self):
+            return SyncStatusView("migration_required")
+
+        def migrate(self, action, participants, participant, **kwargs):
+            self.received = action, participants, participant, kwargs["writers_paused"]
+            return MigrationStatus(
+                MigrationPlan(
+                    SyncTarget("sheet", "log"),
+                    tuple(sorted(participants)),
+                    "fingerprint",
+                    (),
+                    rig.clock.now(),
+                ),
+                (),
+                False,
+            )
+
+    actions = Actions()
+    page = SettingsPage(
+        *rig.window_args, google_sync=settings, google_oauth=OAuth(), sync_actions=actions
+    )
+    qtbot.addWidget(page)
+    page._sync_migration_button.click()
+    view = page._migration_dialog
+    view.roster_edit.setPlainText("office\nhome")
+    view.participant_edit.setText("office")
+    view.paused_check.setChecked(True)
+    view.review_button.click()
+    qtbot.waitUntil(lambda: not page._google_controller.busy)
+    assert actions.received == ("begin", ("office", "home"), "office", True)
+    assert "home" in view.status_label.text()
+    view.reject()
+
+
+def test_settings_conflict_review_cancels_without_writes_and_saves_explicit_choice(qtbot, rig):
+    from qi_flow.application.dto import SyncStatusView
+    from qi_flow.application.google_sync import GoogleSyncSettings
+    from qi_flow.ui.settings_page import SettingsPage
+
+    class OAuth:
+        def is_authorized(self):
+            return True
+
+    class Actions:
+        def __init__(self):
+            self.saved = []
+
+        def status(self):
+            return SyncStatusView("conflict", conflict_count=1, conflicts=(reviewed().conflict,))
+
+        def review(self, identifier):
+            return reviewed()
+
+        def resolve(self, *args):
+            self.saved.append(args)
+
+    actions = Actions()
+    page = SettingsPage(
+        *rig.window_args,
+        google_sync=GoogleSyncSettings(rig.uow, rig.clock),
+        google_oauth=OAuth(),
+        sync_actions=actions,
+    )
+    qtbot.addWidget(page)
+    page._sync_review_button.click()
+    page._conflict_dialog.reject()
+    assert actions.saved == []
+    page._sync_review_button.click()
+    page._conflict_dialog.choices[KEY].setCurrentIndex(1)
+    page._conflict_dialog.save_button.click()
+    qtbot.waitUntil(lambda: not page._google_controller.busy)
+    assert actions.saved[0][1] == frozenset({"a", "b"})
+    assert actions.saved[0][2][KEY]["note"] == "local note"
+
+
+def test_offline_status_survives_worker_cleanup_without_changing_last_success(qtbot, rig):
+    from qi_flow.application.dto import SyncStatusView
+    from qi_flow.application.google_sync import GoogleSyncSettings
+    from qi_flow.ui.settings_page import SettingsPage
+
+    class OAuth:
+        def is_authorized(self):
+            return True
+
+    class Actions:
+        def status(self):
+            return SyncStatusView(
+                "pending", pending_count=2, last_success=datetime(2026, 10, 3, 12, tzinfo=UTC)
+            )
+
+    page = SettingsPage(
+        *rig.window_args,
+        google_sync=GoogleSyncSettings(rig.uow, rig.clock),
+        google_oauth=OAuth(),
+        sync_actions=Actions(),
+    )
+    qtbot.addWidget(page)
+    page._google_operation_failed("sync", OSError("synthetic network refusal"))
+    page._google_busy_changed(False)
+    assert "Offline" in page._sync_status.text()
+    assert "2 pending" in page._sync_status.text()
+    assert "14:00 CEST" in page._sync_status.text()

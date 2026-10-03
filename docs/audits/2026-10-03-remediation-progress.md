@@ -98,8 +98,22 @@ Resolution validates the whole candidate timesheet and atomically saves payloads
 causal parent, outbox, provenance and conflict closure. Stale local changes or newly observed
 remote heads require a new review; a third writer arriving afterward remains a new conflict.
 
-Task 11's Settings/status/runtime wiring is still open. It will use the bounded owned-worker
-controller in Task 12 rather than connect a new flow to the existing unbounded authorization.
+Task 11's Settings/status/runtime wiring subsequently passed the gate below.
+
+## Production sync and bounded authorization verified
+
+The production application facade, Settings migration/status/conflict actions and owned Google
+controller passed `scripts/check.ps1`: **609 tests in 73.73 seconds**, 125 formatted Python files,
+Ruff clean and strict mypy clean for 68 source modules. Manual V2 sync becomes available only after
+verified migration. Failures retain durable pending counts and the prior confirmed success time.
+Authorization runs outside the UI thread, validates callback state, closes its loopback listener,
+supports cancellation and has a two-minute deadline. Token exchange, refresh and Sheets HTTP calls
+have bounded timeouts; cancellation checks separate every adapter request. Normal exit cancels and
+joins the Google worker before releasing database ownership. Tests use synthetic credentials and
+temporary databases, including the real Qt shutdown sequence.
+
+Automatic scheduling remains Task 13. Restore/restart and other integration/update worker ownership
+still require the remaining lifecycle work; this checkpoint does not claim all exit paths complete.
 
 ## Task status
 
@@ -111,7 +125,7 @@ controller in Task 12 rather than connect a new flow to the existing unbounded a
 | 4 — Updater ownership | A07; US32 | Complete; 23 focused tests, review and integrated gate pass; packaged release check remains open. |
 | 5 — Exact DSB row | A09; US30 | Complete; 29 focused tests, review and integrated gate pass; live DSB check remains open. |
 | 6 — Explicit row choices | A18; US45 | Complete code; 93 focused tests, review and integrated gate pass; destination release checks remain open. |
-| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Tasks 7–10 storage, capture, transport, causal reconciliation and guided migration components pass automated acceptance and integrated gates. Conflict review/runtime wiring, responsive authorization and scheduling remain. Ordinary V2 publication remains disabled in the production UI; V1 sync refuses snapshot writes. |
+| 7–13 — Durable sync, migration, conflicts, authorization, schedule | A01–A04, A10; US28, US29, US46 | Tasks 7–12 storage, capture, transport, causal reconciliation, migration, conflict resolution, runtime wiring and bounded authorization pass automated acceptance and integrated gates. Manual V2 sync requires verified migration. Automatic scheduling remains Task 13; V1 sync refuses snapshot writes. |
 | 14 — DSB allowlist | US31 | Pending. |
 | 15 — Calendar and export | A12, A13; US12, US17, US19, US22 | Complete; 32 focused tests, review and integrated gate pass. |
 | 16 — Parent dates / overnight editing | A16; US44 | Complete implementation; endpoint-date/DST/dirty-edit and overnight restart tests pass; integrated gate passed. |

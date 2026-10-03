@@ -21,6 +21,41 @@ class Clock:
         return NOW
 
 
+def test_cancellation_between_google_requests_stops_before_another_api_call():
+    from threading import Event
+
+    sheet = Sheets()
+    cancelled = Event()
+    calls = []
+    original_get = sheet.get
+
+    def get(**kwargs):
+        calls.append(kwargs)
+        request = original_get(**kwargs)
+        action = request.action
+
+        def execute():
+            result = action()
+            cancelled.set()
+            return result
+
+        return Request(execute)
+
+    sheet.get = get
+    adapter = GoogleSheetsSync(
+        GoogleSyncConfiguration(
+            "https://docs.google.com/spreadsheets/d/sheet/edit", "test.apps.googleusercontent.com"
+        ),
+        None,
+        target=TARGET,
+        service_factory=lambda: sheet,
+        cancelled=cancelled.is_set,
+    )
+    with pytest.raises(sync.SyncJobCancelledError):
+        adapter.read_changes()
+    assert len(calls) == 1
+
+
 def group(identifier="c1", **overrides):
     change = SyncChange(
         identifier,

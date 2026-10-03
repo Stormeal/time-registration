@@ -70,9 +70,10 @@ Acceptance criteria:
 
 ### US28 — Connect a private shared timesheet · P1
 
-Implementation status: **In progress** · configuration, OAuth, and explicit sync exist. The October
-audit found callback logging and unbounded main-thread authorization (A05, A10); responsive
-authorization, safe operational status, and privacy verification remain.
+Implementation status: **In progress** · configuration, cancellable bounded browser authorization,
+manual V2 sync, durable operational status and diagnostic privacy pass automated acceptance in the
+609-test gate. The owned Google worker closes before process ownership is released. Live workbook
+and packaged release acceptance remain.
 
 As a consultant, I want to connect QI Flow to my private Google Sheet so that my work laptop and personal desktop can use the same timesheet safely.
 
@@ -90,9 +91,9 @@ Acceptance criteria:
 ### US29 — Synchronize records without silent loss · P1
 
 Implementation status: **In progress** · unsafe V1 snapshot writes are contained. Durable atomic
-capture, append/readback transport, and causal aggregate reconciliation for A01–A04 pass automated
-acceptance and the 547-test quality gate. Reviewed migration, conflict choices, production runtime
-wiring, responsive authorization, and scheduling remain; ordinary V2 publication is still disabled.
+capture, append/readback transport, causal aggregate reconciliation, explicit conflict resolution,
+and production runtime wiring for A01–A04 pass automated acceptance in the 609-test quality gate.
+Manual V2 publication is enabled only after reviewed migration; automatic scheduling remains.
 
 As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 
@@ -219,8 +220,8 @@ Acceptance criteria:
 ### US46 — Upgrade a shared timesheet without losing history · P1
 
 Implementation status: **In progress** · guided migration application, safety-copy adapter and
-review dialog pass automated acceptance in the 572-test gate. Production Settings/worker wiring
-and the two-client live workbook release check remain. Authorized with the remediation plan on 2026-10-03;
+review dialog and production Settings/worker wiring pass automated acceptance in the 609-test gate.
+The two-client live workbook release check remains. Authorized with the remediation plan on 2026-10-03;
 required before enabling the replacement sync protocol for
 an existing V1 workbook. US29 remains the owner of ordinary synchronization and backup reconciliation.
 
@@ -265,7 +266,7 @@ Acceptance criteria:
 - US43 (Epic Q, daily action layout and fair start rounding) is complete and archived in
   `USER_STORIES_ARCHIVE.md`.
 - US44 passes automated implementation acceptance; US46 migration code passes automated
-  acceptance, with production worker wiring and live release acceptance remaining.
+  acceptance, with live release acceptance remaining.
   US45 records the explicit row-choice requirement
   confirmed on 2026-10-03. The user authorized implementation of the remediation plan on
   2026-10-03; task and verification progress is recorded alongside the plan.

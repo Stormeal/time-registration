@@ -5,16 +5,75 @@ from __future__ import annotations
 import importlib
 import json
 import logging
-from typing import Any
+import math
+import socket
+import webbrowser
+from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from time import monotonic
+from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
+
+from qi_flow.application.sync_models import SyncJobCancelledError
 
 _SERVICE = "QI Flow Google Sheets Sync"
 _TOKEN_ACCOUNT = "refresh-token"
 _CLIENT_ACCOUNT = "desktop-client"
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 _LOG = logging.getLogger(__name__)
+
+
+class _CallbackServer(HTTPServer):
+    allow_reuse_address = False
+    expected_state = ""
+    redirect_uri = ""
+    callback_response: str | None = None
+    declined = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        connection, address = super().get_request()
+        connection.settimeout(0.2)  # A client that never sends headers cannot hang exit.
+        return connection, address
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        pass  # Raw request exceptions/URLs must not enter stderr or diagnostics.
+
+
+class _CallbackHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        pass  # BaseHTTPRequestHandler normally logs the private callback query.
+
+    def do_GET(self) -> None:
+        server = cast(_CallbackServer, self.server)
+        parts = urlsplit(self.path)
+        query = parse_qs(parts.query)
+        legitimate = parts.path == "/" and query.get("state") == [server.expected_state]
+        code, error = query.get("code", []), query.get("error", [])
+        if not legitimate or (len(code) != 1 and len(error) != 1):
+            self.send_response(400)
+            self.end_headers()
+            return
+        server.declined = bool(error)
+        server.callback_response = server.redirect_uri + "?" + parts.query
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Authorization response received. Return to QI Flow to see the result.")
+
+
+def _check_authorization(cancelled: Callable[[], bool], deadline: float) -> None:
+    if cancelled():
+        raise SyncJobCancelledError("Google authorization cancelled; existing access is unchanged.")
+    if monotonic() >= deadline:
+        raise TimeoutError("Google authorization timed out. Start authorization again when ready.")
 
 
 def _authorization_error_category(error: Exception) -> str:
@@ -69,7 +128,13 @@ class GoogleOAuthStore:
                 "Windows Credential Manager could not save the Google client setup."
             ) from error
 
-    def authorize(self) -> None:
+    def authorize(
+        self, *, cancelled: Callable[[], bool] = lambda: False, timeout_seconds: float = 120.0
+    ) -> None:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("Authorization needs a positive finite timeout.")
+        deadline = monotonic() + timeout_seconds
+        _check_authorization(cancelled, deadline)
         try:
             content = keyring.get_password(_SERVICE, _CLIENT_ACCOUNT)
         except KeyringError as error:
@@ -81,11 +146,36 @@ class GoogleOAuthStore:
             flow = flow_module.InstalledAppFlow.from_client_config(
                 json.loads(content), list(SCOPES)
             )
-            credentials = flow.run_local_server(
-                port=0, open_browser=True, authorization_prompt_message=None
-            )
-            keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, credentials.to_json())
-        except (ImportError, KeyringError, OSError, ValueError) as error:
+            server = _CallbackServer(("127.0.0.1", 0), _CallbackHandler)
+            try:
+                server.redirect_uri = f"http://localhost:{server.server_port}/"
+                flow.redirect_uri = server.redirect_uri
+                authorization_url, server.expected_state = flow.authorization_url()
+                _check_authorization(cancelled, deadline)
+                if not webbrowser.get(None).open(authorization_url, new=1, autoraise=True):
+                    raise OSError("The browser could not open the authorization page.")
+                while server.callback_response is None:
+                    _check_authorization(cancelled, deadline)
+                    server.timeout = min(0.2, max(0.001, deadline - monotonic()))
+                    server.handle_request()
+                _check_authorization(cancelled, deadline)
+                if server.declined:
+                    raise ValueError("Google authorization was declined.")
+                flow.fetch_token(
+                    authorization_response=server.callback_response.replace(
+                        "http://", "https://", 1
+                    ),
+                    timeout=min(15.0, max(0.001, deadline - monotonic())),
+                )
+                _check_authorization(cancelled, deadline)
+                payload = flow.credentials.to_json()
+                _check_authorization(cancelled, deadline)
+                keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, payload)
+            finally:
+                server.server_close()
+        except (SyncJobCancelledError, TimeoutError):
+            raise
+        except Exception as error:
             # OAuth values and callback URLs must never reach diagnostics.
             category = _authorization_error_category(error)
             _LOG.warning("Google authorization failed (%s)", category)
@@ -115,7 +205,13 @@ class GoogleOAuthStore:
                 json.loads(payload)
             )
             if credentials.expired and credentials.refresh_token:
-                credentials.refresh(request_module.Request())
+                request = request_module.Request()
+
+                def bounded_request(*args: Any, **kwargs: Any) -> Any:
+                    kwargs["timeout"] = 15.0
+                    return request(*args, **kwargs)
+
+                credentials.refresh(bounded_request)
                 keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, credentials.to_json())
             return credentials
         except (ImportError, KeyringError, ValueError) as error:

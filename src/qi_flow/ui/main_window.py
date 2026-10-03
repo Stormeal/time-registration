@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
@@ -21,14 +23,17 @@ from PySide6.QtWidgets import (
 from qi_flow import __version__
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.google_sync import GoogleSyncSettings
+from qi_flow.application.google_sync_service import SyncResult
+from qi_flow.application.ports import GoogleConnection
+from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
 from qi_flow.infrastructure.backups import BackupManager
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
-from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.infrastructure.updates import ReleaseClient
+from qi_flow.ui.google_sync_controller import GoogleSyncController
 from qi_flow.ui.settings_page import SettingsPage
 from qi_flow.ui.testhuset_dialog import SheetFactory
 from qi_flow.ui.theme import ThemeManager, logo_path
@@ -54,8 +59,11 @@ class MainWindow(QMainWindow):
         dsb: DsbService | None = None,
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
-        google_oauth: GoogleOAuthStore | None = None,
+        google_oauth: GoogleConnection | None = None,
         releases: ReleaseClient | None = None,
+        google_controller: GoogleSyncController | None = None,
+        sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
+        sync_actions: GoogleSyncActions | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("QI Flow")
@@ -66,6 +74,7 @@ class MainWindow(QMainWindow):
         self._theme_manager.setParent(self)
         self._service = service
         self._tray_available = True
+        self._exit_approved = False
         self._theme_manager.apply(service.app_preferences().theme if service else "system")
 
         self._navigation = QTabBar()
@@ -106,6 +115,9 @@ class MainWindow(QMainWindow):
                 google_sync,
                 google_oauth,
                 releases,
+                google_controller,
+                sync_command,
+                sync_actions,
             )
             if today_page is not None:
                 settings_page.preferences_saved.connect(today_page.reload_configurable_options)
@@ -116,6 +128,7 @@ class MainWindow(QMainWindow):
         )
         if settings_page is not None and isinstance(timesheet_page, TimesheetPage):
             settings_page.dsb_enabled_changed.connect(timesheet_page.refresh_dsb_availability)
+            settings_page.preferences_saved.connect(timesheet_page.refresh)
         self._settings_page = settings_page
         if settings_page is not None:
             settings_page.preferences_saved.connect(self._apply_saved_theme)
@@ -257,11 +270,18 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Hide to tray, or request the ordinary exit confirmation when no tray exists."""
+        if self._exit_approved:
+            event.accept()
+            return
         event.ignore()
         if self._tray_available:
             self.hide()
         else:
             self.close_app_requested.emit()
+
+    def allow_exit(self) -> None:
+        """Called only after the selected persistence action and worker shutdown succeed."""
+        self._exit_approved = True
 
     def set_tray_available(self, available: bool) -> None:
         """Keep the explicit exit action accessible when Windows has no system tray."""

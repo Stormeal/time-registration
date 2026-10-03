@@ -13,6 +13,7 @@ from qi_flow.application.ports import Clock, IdentifierGenerator, SyncGateway, U
 from qi_flow.application.sync_models import (
     Operation,
     SyncChange,
+    SyncJobCancelledError,
     SyncJobObsoleteError,
     SyncProblem,
     SyncTarget,
@@ -85,6 +86,13 @@ class MigrationPlan:
     legacy_fingerprint: str
     legacy_rows: tuple[tuple[object, ...], ...]
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class MigrationStatus:
+    plan: MigrationPlan
+    acknowledged: tuple[str, ...]
+    completed: bool
 
 
 def local_snapshot(uow: UnitOfWork) -> tuple[Record, ...]:
@@ -269,13 +277,30 @@ class SyncMigration:
         identifiers: IdentifierGenerator,
         *,
         generation: int,
+        cancelled: Callable[[], bool] = lambda: False,
+        deadline: datetime | None = None,
     ) -> None:
         self._factory, self._gateway, self._safety = factory, gateway, safety
         self._clock, self._identifiers, self._generation = clock, identifiers, generation
+        self._cancelled, self._deadline = cancelled, deadline
 
     def _check(self, uow: UnitOfWork) -> None:
+        if self._cancelled():
+            raise SyncJobCancelledError(
+                "Migration cancelled; safety copies and verified work are retained."
+            )
+        if self._deadline is not None and self._clock.now() >= self._deadline:
+            raise TimeoutError("Migration timed out. Reopen review to verify and resume.")
         if uow.settings.get("google_sync_generation") != self._generation:
             raise SyncJobObsoleteError("Sync settings changed; reopen reviewed migration.")
+
+    def status(self) -> MigrationStatus:
+        plan, events = self._plan()
+        snapshots = self._snapshots(plan, events)
+        with self._factory() as uow:
+            self._check(uow)
+            completed = uow.sync_for(plan.target).get_state("migration_complete") is True
+        return MigrationStatus(plan, tuple(sorted(snapshots)), completed)
 
     def _plan(self) -> tuple[MigrationPlan, tuple[Record, ...]]:
         events = self._gateway.read_migration_events()

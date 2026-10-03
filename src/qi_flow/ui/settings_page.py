@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -22,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -35,35 +39,27 @@ from PySide6.QtWidgets import (
 from qi_flow.application.dsb import DsbService
 from qi_flow.application.dto import ReminderSettingsView
 from qi_flow.application.google_sync import GoogleSyncSettings
-from qi_flow.application.google_sync_service import GoogleSyncService
+from qi_flow.application.google_sync_service import GoogleSyncUpgradeRequiredError, SyncResult
+from qi_flow.application.ports import GoogleConnection
+from qi_flow.application.sync_actions import GoogleSyncActions, SyncAuthorizationRequiredError
+from qi_flow.application.sync_migration import MigrationStatus
+from qi_flow.application.sync_models import SyncJobCancelledError, canonical_json
 from qi_flow.application.testhuset import TesthusetCredentialStore, TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
+from qi_flow.domain.errors import DomainError
 from qi_flow.domain.models import IsoWeek
+from qi_flow.domain.time_rules import COPENHAGEN
 from qi_flow.infrastructure.backups import BackupManager, BackupView
 from qi_flow.infrastructure.csv_export import CsvTimesheetExporter
-from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
-from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.paths import AppPaths
 from qi_flow.infrastructure.startup import StartupManager
 from qi_flow.infrastructure.updates import AvailableUpdate, ReleaseClient, UpdateError
 from qi_flow.ui.controls import SettingsWheelGuard
+from qi_flow.ui.google_sync_controller import GoogleSyncController
+from qi_flow.ui.sync_conflict_dialog import SyncConflictDialog
+from qi_flow.ui.sync_migration_dialog import MigrationRequest, SyncMigrationDialog
 from qi_flow.ui.testhuset_credentials_dialog import TesthusetCredentialsDialog
 from qi_flow.ui.testhuset_dialog import SheetFactory, TesthusetDialog
-
-
-class GoogleSyncWorker(QThread):
-    completed = Signal(int)
-    failed = Signal()
-
-    def __init__(self, service: GoogleSyncService) -> None:
-        super().__init__()
-        self._service = service
-
-    def run(self) -> None:
-        try:
-            self.completed.emit(self._service.sync_completed_records())
-        except Exception:
-            self.failed.emit()
 
 
 class UpdateCheckWorker(QThread):
@@ -136,8 +132,11 @@ class SettingsPage(QWidget):
         dsb: DsbService | None = None,
         dsb_sheet_factory: SheetFactory | None = None,
         google_sync: GoogleSyncSettings | None = None,
-        google_oauth: GoogleOAuthStore | None = None,
+        google_oauth: GoogleConnection | None = None,
         releases: ReleaseClient | None = None,
+        google_controller: GoogleSyncController | None = None,
+        sync_command: Callable[[Callable[[], bool]], SyncResult] | None = None,
+        sync_actions: GoogleSyncActions | None = None,
     ) -> None:
         super().__init__()
         self._service = service
@@ -152,6 +151,15 @@ class SettingsPage(QWidget):
         self._dsb_sheet_factory = dsb_sheet_factory
         self._google_sync = google_sync
         self._google_oauth = google_oauth
+        self._sync_command = sync_command
+        self._sync_actions = sync_actions
+        self._migration_dialog: SyncMigrationDialog | None = None
+        self._conflict_dialog: SyncConflictDialog | None = None
+        self._sync_event_message: str | None = None
+        self._google_controller = google_controller or GoogleSyncController(self)
+        self._google_controller.completed.connect(self._google_operation_completed)
+        self._google_controller.failed.connect(self._google_operation_failed)
+        self._google_controller.busy_changed.connect(self._google_busy_changed)
         self._releases = releases
         self._update_worker: QThread | None = None
         self._pending_update: AvailableUpdate | None = None
@@ -443,7 +451,42 @@ class SettingsPage(QWidget):
                         self._sync_now,
                     )
                 )
+                self._google_cancel = QPushButton("Cancel Google operation")
+                self._google_cancel.setEnabled(False)
+                self._google_cancel.clicked.connect(self._google_controller.cancel)
+                connection_layout.addWidget(
+                    self._settings_group(
+                        "Cancel",
+                        "Stops the current operation. Unverified changes remain pending.",
+                        QFormLayout(),
+                        self._google_cancel,
+                    )
+                )
                 self._refresh_google_status()
+                if sync_actions is not None:
+                    self._sync_migration_button = QPushButton("Review shared Sheet migration")
+                    self._sync_migration_button.clicked.connect(self._open_sync_migration)
+                    connection_layout.addWidget(
+                        self._settings_group(
+                            "Upgrade shared sync",
+                            "Includes every participating computer's history "
+                            "and preserves safety copies.",
+                            QFormLayout(),
+                            self._sync_migration_button,
+                        )
+                    )
+                    self._sync_review_button = QPushButton("Review shared-data conflicts")
+                    self._sync_review_button.clicked.connect(self._open_sync_review)
+                    connection_layout.addWidget(
+                        self._settings_group(
+                            "Review",
+                            "Choose explicitly between differing histories "
+                            "or inspect preserved invalid data.",
+                            QFormLayout(),
+                            self._sync_review_button,
+                        )
+                    )
+                    self._refresh_sync_status()
         self._testhuset_default = QComboBox()
         self._testhuset_week = QDateEdit(QDate.currentDate())
         self._testhuset_week.setDisplayFormat("dd/MM/yyyy")
@@ -750,11 +793,69 @@ class SettingsPage(QWidget):
     def _authorize_google(self) -> None:
         if self._google_oauth is None:
             return
-        try:
-            self._google_oauth.authorize()
+        if self._google_controller.authorize(self._google_oauth):
+            self._authorization_status.setText("Waiting for browser authorization…")
+
+    def _google_busy_changed(self, busy: bool) -> None:
+        if hasattr(self, "_google_auth_button"):
+            self._google_auth_button.setEnabled(not busy)
+            self._sync_now.setEnabled(not busy)
+            self._google_cancel.setEnabled(busy)
+            if self._sync_actions is not None:
+                self._sync_migration_button.setEnabled(not busy)
+                self._sync_review_button.setEnabled(not busy)
+                if not busy:
+                    self._refresh_sync_status()
+
+    def _google_operation_completed(self, kind: str, result: object) -> None:
+        if kind == "authorize":
+            self._sync_event_message = None
             self._refresh_google_status()
-        except ValueError as error:
-            self._show_error("Google authorization", str(error))
+        elif kind == "sync" and isinstance(result, SyncResult):
+            self._sync_completed(result)
+        elif kind == "migration" and isinstance(result, MigrationStatus):
+            if self._migration_dialog is not None:
+                self._migration_dialog.show_status(
+                    result.plan, result.acknowledged, completed=result.completed
+                )
+        elif kind == "resolve":
+            if self._conflict_dialog is not None:
+                self._conflict_dialog.accept()
+            self.preferences_saved.emit()
+
+    def _google_operation_failed(self, kind: str, error: object) -> None:
+        if kind == "authorize":
+            self._refresh_google_status()
+            if isinstance(error, (SyncJobCancelledError, TimeoutError)):
+                self._authorization_status.setText(str(error))
+            else:
+                self._authorization_status.setText(
+                    "Authorization failed; check client setup and retry."
+                )
+        elif kind == "sync":
+            self._sync_progress.setVisible(False)
+            if isinstance(error, (GoogleSyncUpgradeRequiredError, SyncAuthorizationRequiredError)):
+                message = str(error)
+            elif isinstance(error, SyncJobCancelledError):
+                message = "Sync cancelled. Unverified changes remain pending."
+            elif isinstance(error, OSError):
+                message = "Offline or request timed out. Pending changes are retained."
+            else:
+                message = "Sync could not be verified. Check authorization and shared-data review."
+            self._sync_status.setText(message)
+            self._sync_event_message = message
+        elif kind in {"migration", "resolve"}:
+            if isinstance(error, (ValueError, DomainError, TimeoutError)):
+                message = str(error)
+            else:
+                message = (
+                    "Could not verify this operation. Safety copies and pending "
+                    "work are retained; check access and retry."
+                )
+            if kind == "migration" and self._migration_dialog is not None:
+                self._migration_dialog.show_failure(message)
+            elif self._conflict_dialog is not None:
+                self._conflict_dialog.show_failure(message)
 
     def _disconnect_google(self) -> None:
         if self._google_oauth is None:
@@ -766,7 +867,7 @@ class SettingsPage(QWidget):
             self._show_error("Google authorization", str(error))
 
     def _toggle_google_authorization(self) -> None:
-        if self._google_oauth is None:
+        if self._google_oauth is None or self._google_controller.busy:
             return
         if self._google_oauth.is_authorized():
             self._disconnect_google()
@@ -779,33 +880,172 @@ class SettingsPage(QWidget):
         try:
             # Syncing persists the values shown in the form. Users should not have to
             # discover and click a separate save action after OAuth authorization.
-            configuration = self._google_sync.save_values(
-                self._sync_sheet_url.text(), self._sync_client_id.text()
+            self._google_sync.save_values(self._sync_sheet_url.text(), self._sync_client_id.text())
+            command = (
+                self._sync_actions.synchronize
+                if self._sync_actions is not None
+                else self._sync_command
             )
-            service = GoogleSyncService(
-                self._service._uow_factory, GoogleSheetsSync(configuration, self._google_oauth)
-            )
+            if command is None:
+                raise GoogleSyncUpgradeRequiredError(
+                    "Review the shared Sheet migration before syncing. "
+                    "Local tracking remains available."
+                )
             self._sync_progress.setRange(0, 0)
             self._sync_progress.setVisible(True)
             self._sync_now.setEnabled(False)
             self._sync_status.setText("Status: synchronizing completed records…")
-            self._sync_worker = GoogleSyncWorker(service)
-            self._sync_worker.completed.connect(self._sync_completed)
-            self._sync_worker.failed.connect(self._sync_failed)
-            self._sync_worker.start()
+            self._sync_event_message = None
+            self._google_controller.start("sync", command)
         except ValueError as error:
-            self._show_error("Google Sheets sync", str(error))
+            self._sync_status.setText(str(error))
 
-    def _sync_completed(self, count: int) -> None:
+    def _sync_completed(self, result: SyncResult) -> None:
+        self._sync_event_message = None
         self._sync_progress.setVisible(False)
         self._sync_now.setEnabled(True)
-        self._sync_status.setText(f"Status: synchronized {count} completed records")
+        states = {
+            "synced": "Verified sync",
+            "pending": "Changes pending",
+            "conflict": "Conflicts require review",
+            "invalid_data": "Invalid shared data requires review",
+        }
+        text = (
+            f"{states.get(result.state, result.state)}; "
+            f"{result.pending_count} pending; {result.conflict_count} conflicts."
+        )
+        if result.last_success is not None:
+            text += " Last verified sync: " + result.last_success.astimezone(COPENHAGEN).strftime(
+                "%d/%m/%Y %H:%M %Z"
+            )
+        self._sync_status.setText(text)
+        self.preferences_saved.emit()
 
-    def _sync_failed(self) -> None:
-        self._sync_progress.setVisible(False)
-        self._sync_now.setEnabled(True)
-        self._sync_status.setText("Status: synchronization failed")
-        self._show_error("Google Sheets sync", "Sync failed. Check authorization and try again.")
+    def _refresh_sync_status(self) -> None:
+        if self._sync_actions is None or self._google_controller.busy:
+            return
+        status = self._sync_actions.status()
+        descriptions = {
+            "unconfigured": "Save a private Sheet connection first.",
+            "migration_required": "Review migration with every participating "
+            "computer before syncing.",
+            "authorization_required": "Authorize this computer. Local changes remain pending.",
+            "ready": "Migration is verified. Ready to sync.",
+            "synced": "Last sync verified.",
+            "pending": "Changes or incomplete history are pending verification.",
+            "conflict": "Differing histories require an explicit review.",
+            "invalid_data": "Preserved invalid data requires review; publication is paused.",
+        }
+        text = (
+            f"{self._sync_event_message or descriptions.get(status.state, status.state)} "
+            f"{status.pending_count} pending; {status.conflict_count} conflicts; "
+            f"{status.problem_count} data issues."
+        )
+        if status.last_success:
+            text += " Last verified sync: " + status.last_success.astimezone(COPENHAGEN).strftime(
+                "%d/%m/%Y %H:%M %Z"
+            )
+        self._sync_status.setText(text)
+        self._sync_review_button.setEnabled(bool(status.conflict_count or status.problem_count))
+        self._sync_now.setEnabled(
+            status.state not in {"unconfigured", "migration_required", "authorization_required"}
+        )
+
+    def _open_sync_migration(self) -> None:
+        if self._sync_actions is None or self._google_sync is None or self._google_controller.busy:
+            return
+        try:
+            self._google_sync.save_values(self._sync_sheet_url.text(), self._sync_client_id.text())
+        except ValueError as error:
+            self._sync_status.setText(str(error))
+            return
+        dialog = SyncMigrationDialog(self)
+        self._migration_dialog = dialog
+        dialog.migration_requested.connect(self._start_sync_migration)
+        dialog.cancel_requested.connect(self._google_controller.cancel)
+        dialog.finished.connect(self._migration_closed)
+        dialog.show()
+
+    def _migration_closed(self) -> None:
+        self._migration_dialog = None
+
+    def _start_sync_migration(self, request: MigrationRequest) -> None:
+        actions = self._sync_actions
+        if actions is None:
+            return
+        self._google_controller.start(
+            "migration",
+            lambda cancelled: actions.migrate(
+                request.action,
+                request.participants,
+                request.participant,
+                writers_paused=request.writers_paused,
+                cancelled=cancelled,
+            ),
+        )
+
+    def _open_sync_review(self) -> None:
+        if self._sync_actions is None or self._google_controller.busy:
+            return
+        try:
+            status = self._sync_actions.status()
+            if not status.conflicts:
+                self._show_sync_problems()
+                return
+            review = self._sync_actions.review(status.conflicts[0].conflict_id)
+        except (ValueError, DomainError) as error:
+            self._sync_status.setText(str(error))
+            return
+        dialog = SyncConflictDialog(review, self)
+        self._conflict_dialog = dialog
+        dialog.resolution_requested.connect(self._resolve_sync_conflict)
+        dialog.finished.connect(self._conflict_closed)
+        dialog.show()
+
+    def _conflict_closed(self) -> None:
+        self._conflict_dialog = None
+
+    def _resolve_sync_conflict(self, conflict_id: str, heads: object, payloads: object) -> None:
+        actions = self._sync_actions
+        if actions is None or not isinstance(heads, frozenset) or not isinstance(payloads, dict):
+            return
+
+        def resolve(cancelled: Callable[[], bool]) -> None:
+            if cancelled():
+                raise SyncJobCancelledError("Resolution cancelled before saving.")
+            actions.resolve(conflict_id, heads, payloads)
+
+        self._google_controller.start("resolve", resolve)
+
+    def _show_sync_problems(self) -> None:
+        if self._sync_actions is None:
+            return
+        problems = self._sync_actions.problems()
+        if not problems:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preserved shared-data issues")
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            "Publication is paused. Review the preserved data below. Pause and upgrade "
+            "any V1 writers. Unsupported or damaged histories need a fresh migration into "
+            "a new private Sheet; retain the old Sheet and safety copies."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        raw = QPlainTextEdit(
+            "\n\n".join(
+                canonical_json({"reason": p.reason, "source": p.source, "preserved_data": p.raw})
+                for p in problems
+            )
+        )
+        raw.setReadOnly(True)
+        layout.addWidget(raw)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(680, 520)
+        dialog.show()
 
     def _refresh_google_status(self) -> None:
         if self._google_oauth is None or not hasattr(self, "_authorization_status"):

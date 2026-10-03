@@ -158,3 +158,95 @@ def test_verified_recovery_releases_ownership_before_restart(
     finally:
         for guard in guards:
             guard.release()
+
+
+def test_normal_exit_cancels_owned_google_worker_before_event_loop_and_lock_release(
+    qapp, tmp_path, monkeypatch
+):
+    import threading
+
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+
+    from qi_flow.ui.google_sync_controller import GoogleSyncController
+
+    paths = AppPaths.for_root(tmp_path / "worker lifecycle")
+    previous_quit_on_close = qapp.quitOnLastWindowClosed()
+    monkeypatch.setenv("QI_FLOW_DATA_DIR", str(paths.data_dir))
+    monkeypatch.setattr(bootstrap, "QApplication", lambda args: qapp)
+    monkeypatch.setattr(bootstrap.QSystemTrayIcon, "isSystemTrayAvailable", lambda: False)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    operations, controllers, windows = [], [], []
+    started = threading.Event()
+
+    class OAuth:
+        def is_authorized(self):
+            return False
+
+        def authorize(self, *, cancelled, timeout_seconds):
+            started.set()
+            while not cancelled():
+                threading.Event().wait(0.01)
+            operations.append("cancelled")
+
+    monkeypatch.setattr(bootstrap, "GoogleOAuthStore", OAuth)
+
+    class Controller(GoogleSyncController):
+        def __init__(self, parent):
+            super().__init__(parent)
+            controllers.append(self)
+            self.ready_for_shutdown.connect(lambda: operations.append("ready"))
+
+        def wait_for_shutdown(self):
+            operations.append("after-event-loop")
+            super().wait_for_shutdown()
+
+    monkeypatch.setattr(bootstrap, "GoogleSyncController", Controller)
+    real_window = bootstrap.MainWindow
+
+    def window(*args, **kwargs):
+        result = real_window(*args, **kwargs)
+        windows.append(result)
+        return result
+
+    monkeypatch.setattr(bootstrap, "MainWindow", window)
+
+    class Guard(SingleInstanceGuard):
+        def release(self):
+            if controllers:
+                assert not controllers[0].busy
+                operations.append("released")
+            super().release()
+
+    monkeypatch.setattr(bootstrap, "SingleInstanceGuard", Guard)
+    real_exec = qapp.exec
+
+    def run_loop():
+        windows[0]._settings_page._authorize_google()
+
+        def close_when_started():
+            if not started.is_set():
+                QTimer.singleShot(5, close_when_started)
+                return
+            operations.append("close-requested")
+            windows[0].close()
+
+        QTimer.singleShot(0, close_when_started)
+        return real_exec()
+
+    monkeypatch.setattr(qapp, "exec", run_loop)
+    assert bootstrap.run(["qi-flow"]) == 0
+    assert operations[:5] == [
+        "close-requested",
+        "cancelled",
+        "ready",
+        "after-event-loop",
+        "released",
+    ]
+    qapp.setQuitOnLastWindowClosed(previous_quit_on_close)
+    QCoreApplication.removePostedEvents(qapp, QEvent.Type.Quit)
+    for window in windows:
+        window.set_tray_available(True)
+        window.hide()
+        window.deleteLater()
+    for controller in controllers:
+        controller.deleteLater()

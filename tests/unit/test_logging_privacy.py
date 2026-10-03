@@ -7,7 +7,7 @@ import logging
 import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 import google_auth_oauthlib.flow  # type: ignore[import-untyped]
 import pytest
@@ -39,7 +39,6 @@ def test_oauth_callback_never_reaches_diagnostic_file(
 ) -> None:
     """A real local OAuth callback must not persist its URL, code, or state."""
     code = "synthetic-auth-code-private"
-    state = "synthetic-auth-state-private"
     token = "synthetic-refresh-token-private"
     client = json.dumps(
         {
@@ -58,16 +57,21 @@ def test_oauth_callback_never_reaches_diagnostic_file(
     )
 
     callback_urls: list[str] = []
+    callback_states: list[str] = []
     requests: list[threading.Thread] = []
 
     class LocalBrowser:
         def open(self, authorization_url: str, **_kwargs: object) -> bool:
             redirect_uri = parse_qs(urlsplit(authorization_url).query)["redirect_uri"][0]
+            state = parse_qs(urlsplit(authorization_url).query)["state"][0]
+            callback_states.append(state)
             callback_url = f"{redirect_uri}?{urlencode({'code': code, 'state': state})}"
             callback_urls.append(callback_url)
 
             def send_callback() -> None:
-                with urlopen(callback_url, timeout=5) as response:
+                with build_opener(ProxyHandler({})).open(
+                    callback_url.replace("localhost", "127.0.0.1"), timeout=5
+                ) as response:
                     response.read()
 
             request = threading.Thread(target=send_callback)
@@ -98,7 +102,13 @@ def test_oauth_callback_never_reaches_diagnostic_file(
     content = diagnostic_file.read_text(encoding="utf-8")
     assert f"QI Flow {__version__} started" in content
     assert "Google authorization failed" in content
-    for private_value in (code, state, token, callback_urls[0], "synthetic-client-secret-private"):
+    for private_value in (
+        code,
+        *callback_states,
+        token,
+        callback_urls[0],
+        "synthetic-client-secret-private",
+    ):
         assert private_value not in content
 
 

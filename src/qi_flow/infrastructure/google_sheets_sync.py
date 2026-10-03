@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
+from time import monotonic
 from typing import Any
 from urllib.parse import urlparse
 
@@ -14,6 +16,7 @@ from qi_flow.application.google_sync_service import GoogleSyncUpgradeRequiredErr
 from qi_flow.application.sync_migration import fingerprint
 from qi_flow.application.sync_models import (
     SyncChange,
+    SyncJobCancelledError,
     SyncProblem,
     SyncTarget,
     canonical_json,
@@ -27,6 +30,24 @@ _V2_TAB = "QI_FLOW_SYNC_V2"
 _MIGRATION_TAB = "QI_FLOW_MIGRATION_V2"
 
 
+class _GuardedApi:
+    """Check around each execute, including multiple requests in one adapter method."""
+
+    def __init__(self, api: Any, check: Callable[[], None]) -> None:
+        self._api, self._check = api, check
+
+    def __getattr__(self, name: str) -> Any:
+        method = getattr(self._api, name)
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            self._check()
+            result = method(*args, **kwargs)
+            self._check()
+            return result if name == "execute" else _GuardedApi(result, self._check)
+
+        return call
+
+
 class GoogleSheetsSync:
     def __init__(
         self,
@@ -35,6 +56,8 @@ class GoogleSheetsSync:
         *,
         target: SyncTarget | None = None,
         service_factory: Callable[[], Any] | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
+        timeout_seconds: float = 120.0,
     ) -> None:
         self._configuration, self._oauth = configuration, oauth
         if target is not None and target.spreadsheet_id != configuration.spreadsheet_id:
@@ -42,14 +65,29 @@ class GoogleSheetsSync:
         self._target = target
         self._service_factory = service_factory
         self._problems: tuple[SyncProblem, ...] = ()
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("Sync requests need a positive finite timeout.")
+        self._cancelled, self._expires_at = cancelled, monotonic() + timeout_seconds
+
+    def _check_request(self) -> None:
+        if self._cancelled():
+            raise SyncJobCancelledError("Sync cancelled; verify pending changes before retrying.")
+        if monotonic() >= self._expires_at:
+            raise TimeoutError("Sync request deadline expired; pending changes are retained.")
 
     def _service(self) -> Any:
+        self._check_request()
         if self._service_factory is not None:
-            return self._service_factory()
+            return _GuardedApi(self._service_factory(), self._check_request)
         if self._oauth is None:
             raise ValueError("Google authorization is required.")
         discovery: Any = importlib.import_module("googleapiclient.discovery")
-        return discovery.build("sheets", "v4", credentials=self._oauth.credentials())
+        httplib: Any = importlib.import_module("httplib2")
+        authorized: Any = importlib.import_module("google_auth_httplib2")
+        http = authorized.AuthorizedHttp(self._oauth.credentials(), http=httplib.Http(timeout=15))
+        service = discovery.build("sheets", "v4", http=http, cache_discovery=False)
+        self._check_request()
+        return _GuardedApi(service, self._check_request)
 
     def _v2_rows(self, service: Any) -> tuple[int, list[list[object]]]:
         target = self._target

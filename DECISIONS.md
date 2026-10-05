@@ -110,6 +110,7 @@ This file records the shared understanding reached during the design interview. 
 | D101 | QI Flow owns only dedicated structured tabs in the selected Sheet and must preserve all existing user tabs, formulas, formatting, and history. Conflicting edits require an explicit user decision. |
 | D102 | DSB registration uses the Timesheet-selected ISO week, requires a reviewed keep-or-replace decision per differing day, and invokes DSB's **Send** action only after confirmation. It never approves or locks a DSB week. |
 | D103 | DSB totals use only completed sessions whose resolved Testhuset project/task branch is in a user-managed DSB allowlist. Other and unresolved branches are excluded from DSB without changing QI Flow or Testhuset totals. The review exposes included and excluded totals, and an allowlist change invalidates an existing review. |
+| D104 | Google automatic sync runs once at app opening and after a committed Finish work, following its 30-second Undo window. Start work, manual edits, idle polling and periodic schedules do not trigger sync. Sync now remains available. Failures retain pending records for the next permitted trigger; server cooldown applies to later automatic attempts. Finish events arriving during another Google job are coalesced without losing the request. Closing starts no new sync. |
 
 ## Completion standard
 
@@ -120,6 +121,10 @@ This file records the shared understanding reached during the design interview. 
 
 ## Change log
 
+- 2026-10-05: The user replaced periodic/change-driven Google sync with opening and Finish-work
+  triggers (D104). One-shot timers preserve Undo grace without recurring idle queries. Successful
+  Finish notifications follow the atomic local/outbox commit and cover window, tray and exit flows.
+  Failed syncs and manual edits remain durable until another permitted trigger or Sync now.
 - 2026-10-04: Approved audit implementation uses an immutable causal V2 sync log and atomic local
   outbox. V1 snapshot writes refuse publication; verified migration requires every declared
   participant, preserves V1 and local safety copies, and exposes divergent histories. Completed

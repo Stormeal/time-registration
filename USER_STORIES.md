@@ -96,9 +96,10 @@ Acceptance criteria:
 
 Implementation status: **Awaiting release verification** · V1 snapshot writes refuse publication.
 Atomic capture, append/readback, causal reconciliation, conflicts, tombstones, active-state
-protection and scheduling pass the fresh 672-test gate. V2 requires reviewed migration. Opening,
-eligible changes and five-minute checks share one worker; failures retain pending changes with
-backoff. Closing cancels/joins work and preserves pending changes. Real two-client acceptance remains.
+protection and scheduling pass automated checks. V2 requires reviewed migration. Opening and
+committed Finish work share one worker; D104 replaces eligible-change and five-minute scheduling.
+Failures retain pending changes until another permitted trigger. Closing cancels/joins work and
+preserves pending changes. Real two-client acceptance remains.
 
 As a consultant, I want completed time records to synchronize between my machines so that I can continue tracking without re-entering time.
 
@@ -108,9 +109,15 @@ Acceptance criteria:
 - A completed local change is persisted before any network operation; offline changes remain pending and retry on the next explicit or scheduled sync.
 - Concurrent edits to the same record are presented as a conflict with clear local and remote choices; QI Flow never silently overwrites either value.
 - Active timers remain local until they become completed records; sync never creates a second active timer on another machine.
-- Sync runs at app opening, after an eligible local change, and on a bounded periodic schedule
-  while the app is open. Closing starts no new request, cancels and joins current bounded work,
-  and preserves durable pending changes for the next opening, as recorded in `DECISIONS.md`.
+- Automatic sync runs once on app opening and after a successfully committed Finish work, after
+  its 30-second Undo window. Start work, manual edits and the passage of idle time do not trigger
+  sync; no recurring eligibility timer remains. Explicit Sync now remains available.
+- A Finish requested while another Google job is running waits for its worker and Undo grace;
+  a manual sync during grace does not consume the later Finish request. Failed Finish commands
+  do not schedule sync. Failed syncs retain pending changes for the next permitted trigger, with
+  server cooldown honored by later automatic attempts.
+- Closing starts no new request, cancels and joins current bounded work, and preserves durable
+  pending changes for the next opening, as recorded in `DECISIONS.md`.
 - Local changes and their pending sync records commit atomically. An uncertain publication can be
   retried after restart without losing changes or creating duplicate logical records.
 - Independent changes remain conflicts even when numeric revisions differ. Deletion markers

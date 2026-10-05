@@ -1,6 +1,8 @@
-"""One owned cancellable worker; UI delivery and shutdown stay on the main thread."""
+"""Owned Google jobs with one-shot opening and committed-finish requests."""
 
-from PySide6.QtCore import QObject, QTimer, Slot
+from math import ceil
+
+from PySide6.QtCore import QObject, Qt, QTimer, Slot
 
 from qi_flow.application.ports import GoogleAuthorization
 from qi_flow.application.sync_actions import GoogleSyncActions
@@ -17,7 +19,7 @@ class GoogleSyncController(OwnedOperationController):
 
 
 class AutomaticSyncController(QObject):
-    """Poll committed eligibility, sharing the owned worker with manual commands."""
+    """Share the owned worker without periodic database or network polling."""
 
     def __init__(
         self,
@@ -31,13 +33,31 @@ class AutomaticSyncController(QObject):
         self._running: SyncScheduleState | None = None
         self._closed = False
         self._timer = QTimer(self)
-        self._timer.setInterval(5000)
+        self._timer.setSingleShot(True)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self.poll)
         worker.completed.connect(self._completed)
         worker.failed.connect(self._failed)
         worker.started.connect(self._started)
-        self._timer.start()
-        QTimer.singleShot(0, self.poll)
+        worker.busy_changed.connect(self._busy_changed)
+        self._arm()
+
+    def _arm(self) -> None:
+        self._timer.stop()
+        if self._closed or self._worker.busy:
+            return
+        delay = self._schedule.delay_seconds()
+        if delay is not None:
+            self._timer.start(min(2_147_483_647, ceil(delay * 1000)))
+
+    @Slot()
+    def work_finished(self) -> None:
+        self._schedule.work_finished()
+        self._arm()
+
+    @Slot(bool)
+    def _busy_changed(self, busy: bool) -> None:
+        self._arm()
 
     @Slot()
     def poll(self) -> None:
@@ -47,16 +67,19 @@ class AutomaticSyncController(QObject):
         due = self._schedule.due(state, busy=self._worker.busy)
         if self._running is not None and state.binding != self._running.binding:
             self._worker.cancel()
+        if state.binding is None and not self._worker.busy:
+            self._schedule.started(state)
+            self._timer.stop()
+            return
         if due:
             self._running = state
-            if self._worker.start(
+            if not self._worker.start(
                 "sync",
                 self._actions.synchronize,
                 valid=lambda: self._actions.schedule_state().binding == state.binding,
             ):
-                self._schedule.started(state)
-            else:
                 self._running = None
+        self._arm()
 
     @Slot(str, object)
     def _completed(self, kind: str, result: object) -> None:
@@ -66,7 +89,8 @@ class AutomaticSyncController(QObject):
     def _started(self, kind: str) -> None:
         if kind == "sync":
             self._running = self._actions.schedule_state()
-            self._schedule.started(self._running)
+            if self._schedule.due(self._running, busy=False):
+                self._schedule.started(self._running)
 
     @Slot(str, object)
     def _failed(self, kind: str, error: object) -> None:
@@ -79,6 +103,7 @@ class AutomaticSyncController(QObject):
                 self._running.binding, succeeded=succeeded, retry_after=retry_after
             )
             self._running = None
+        self._arm()
 
     @Slot()
     def begin_shutdown(self) -> None:
@@ -94,4 +119,4 @@ class AutomaticSyncController(QObject):
         self._closed = False
         self._running = None
         self._schedule.resume()
-        self._timer.start()
+        self._arm()

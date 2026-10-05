@@ -1,6 +1,6 @@
 # Work time tracker — requirements
 
-Version: 0.6 · Updated: 2026-10-04 · Status: approved scope; audit implementation verified, release acceptance open
+Version: 0.7 · Updated: 2026-10-05 · Status: approved scope; audit implementation verified, release acceptance open
 
 ## Goal and context
 
@@ -29,7 +29,7 @@ Detailed product decisions are recorded in `DECISIONS.md`. Implementable iterati
 | R05 | **Start lunch** begins a separate lunch interval that continues until **End lunch** is pressed. The surrounding work session remains continuous, while completed lunch time is deducted from net worked hours. | Complete |
 | R06 | View logged hours for every day of each month within the application. | Complete |
 | R07 | Share one synchronized timesheet across the work laptop and personal desktop. | In progress |
-| R08 | Use a private Google Sheet as shared storage; synchronize on opening, eligible completed changes and periodically. Closing cancels bounded work and preserves pending changes for the next opening. | In progress |
+| R08 | Use a private Google Sheet as shared storage; synchronize on opening and after Finish work's 30-second undo window, with an explicit Sync now action. No Start-work or periodic automatic sync. Closing cancels bounded work and preserves pending changes for the next opening. | In progress |
 | R09 | Provide button-driven weekly registration to Testhuset at https://testhuset.eazyproject.net/dashboard.aspx. | In progress |
 | R10 | Provide reviewed button-driven weekly registration through the DSB browser timesheet and its Send action. SAP automation remains deferred. | In progress |
 | R11 | Python is the preferred language following discussion. | Complete |
@@ -71,7 +71,7 @@ September 3, 2026: 08:00–15:30 plus 19:45–20:45 = 8h 30m = 8.5 decimal hours
 | ID | Proposal | Supports |
 | --- | --- | --- |
 | P01 | PySide6 UI and local SQLite storage; save each action before attempting network synchronization. | R01–R08 |
-| P02 | Sync after changes and periodically while open, plus opening/closing; expose Sync now and last successful sync. Closing sync is best effort. | R07–R08 |
+| P02 | Sync once on opening and after a committed Finish work's undo window; expose Sync now and last successful sync. Manual edits and failed attempts remain pending until the next opening, Finish, or explicit sync. Closing cancels existing work without starting a new sync. | R07–R08 |
 | P03 | Keep pending offline changes and retry after reconnection; restarting the app preserves running work/lunch timestamps. | R02, R05, R07 |
 | P04 | Detect conflicting edits and overlapping work from different machines; never silently discard an edit. Exact concurrency design requires validation. | R07–R08 |
 | P05 | Add dedicated structured tabs to the existing private spreadsheet, with stable record IDs, revision/device details and deletion markers. Preserve the existing formatted month tabs, formulas, and history. | R08, R13 |

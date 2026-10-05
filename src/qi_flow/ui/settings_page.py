@@ -474,7 +474,7 @@ class SettingsPage(QWidget):
                 self._sync_progress = QProgressBar()
                 self._sync_progress.setVisible(False)
                 self._sync_status = QLabel(
-                    "Completed changes sync automatically after reviewed migration."
+                    "Syncs when QI Flow opens and after Finish work, once migration is verified."
                 )
                 self._sync_status.setWordWrap(True)
                 sync_action_form = QFormLayout()

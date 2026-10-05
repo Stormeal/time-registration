@@ -1,9 +1,8 @@
 # Google Sheets sync protocol V2
 
 The audit remediation replaces snapshot replacement with an immutable change log. The current
-implementation stores protocol state and captures eligible local commands atomically; ordinary V2
-publication remains disabled until reviewed initialization or
-migration are implemented and verified.
+implementation stores protocol state and captures eligible local commands atomically. Ordinary V2
+publication remains disabled until the participant's reviewed migration is verified.
 The public V1 sync operation refuses before reading the Sheet or importing records and explains
 that a reviewed upgrade is required. Local tracking remains available.
 
@@ -81,8 +80,25 @@ timers. Soft-deleted/withdrawn work retains immutable protocol provenance. A res
 is reconciled against remote history before publication, preventing silent resurrection.
 
 The composed service records confirmed success only when no pending changes, conflicts, staging,
-or raw problems remain. Its callbacks recheck target/generation ownership. It is not yet wired to
-production Settings; guided migration and conflict choices remain required.
+or raw problems remain. Its callbacks recheck target/generation ownership. Settings exposes
+reviewed migration, explicit conflict choices, durable status, and manual sync.
+
+## Automatic sync triggers (D104)
+
+QI Flow requests one automatic sync on app opening and after a committed **Finish work**, following
+the 30-second Undo window. **Start work**, lunch actions, manual corrections and idle time do not
+trigger sync. There is no recurring eligibility polling or five-minute network timer. **Save and
+sync now** remains available for immediate transfers after a correction or on a receiving PC.
+
+The shared tracking service notifies the scheduler after committing the finished timer and
+outbox; window, tray, recovery and exit actions use the same service. Finish requests coalesce
+while another Google operation owns the worker. A manual sync during Undo grace does not consume
+the delayed Finish request. Failed Finish commands do not notify the scheduler.
+
+Failed requests keep the immutable pending records and wait for the next opening, Finish or manual
+sync. Later automatic requests honor server cooldown. Closing cancels owned work and stops the
+one-shot timer; Finish-and-exit records remain local for the next opening. Active timers remain
+local throughout synchronization.
 
 ## Migration and release prerequisites
 
@@ -117,8 +133,8 @@ Each subsequent pull and append checks the frozen V1 fingerprint when a migratio
 renewed old-client writes produce a durable problem and pause publication. This detection cannot
 atomically fence an old writer.
 
-These components pass synthetic adapter, temporary SQLite and Qt interaction checks. Production
-Settings/worker wiring is the next task, so the released UI still does not enable ordinary V2 sync.
+These components and Settings/worker wiring pass synthetic adapter, temporary SQLite and Qt
+interaction checks. Ordinary V2 sync requires verified per-machine migration activation.
 
 Unknown schemas, malformed rows, incomplete groups, missing ancestry, conflicting IDs, and invalid
 timesheet aggregates require durable, visible reconciliation. Quota failures leave pending changes

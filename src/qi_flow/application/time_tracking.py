@@ -89,6 +89,8 @@ class TimeTrackingApplicationService:
         clock: Clock,
         identifiers: IdentifierGenerator,
         rounding_minutes: int = 5,
+        *,
+        on_work_finished: Callable[[], None] | None = None,
     ) -> None:
         if rounding_minutes not in VALID_ROUNDING_MINUTES:
             raise ValueError("rounding must be one of 1, 5, 10, or 15 minutes")
@@ -97,6 +99,7 @@ class TimeTrackingApplicationService:
         self._identifiers = identifiers
         self._rounding_minutes = rounding_minutes
         self._undo_action: _UndoAction | None = None
+        self._on_work_finished = on_work_finished
 
     def _mutation(self, *, finish_grace: bool = False) -> AbstractContextManager[UnitOfWork]:
         now = self._when(None)
@@ -932,6 +935,8 @@ class TimeTrackingApplicationService:
             self._retire_reminder(uow, "work", str(session.id), now)
             self._copy_office_context(uow, session.actual_started_at, now)
         self._undo_action = _UndoAction("finish", str(session.id), now)
+        if self._on_work_finished is not None:
+            self._on_work_finished()
         return ActiveStateView(None, None, None, None, 0)
 
     def start_deduction(self, command: StartDeductionCommand) -> ActiveStateView:

@@ -1,7 +1,7 @@
 """Conflict review presents provenance and requires explicit choices for each entry."""
 
 import importlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from qi_flow.application.sync_models import (
     SyncChange,
@@ -271,7 +271,7 @@ def test_obsolete_connection_result_is_discarded_on_delivery(qtbot):
     assert deliveries == []
 
 
-def test_automatic_sync_coalesces_commits_and_stops_on_close(qtbot):
+def test_automatic_sync_runs_on_open_and_finish_without_idle_polling(qtbot):
     import threading
 
     from qi_flow.application.sync_models import SyncTarget
@@ -279,14 +279,18 @@ def test_automatic_sync_coalesces_commits_and_stops_on_close(qtbot):
     from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 
     class Clock:
+        value = datetime(2026, 10, 3, 12, tzinfo=UTC)
+
         def now(self):
-            return datetime(2026, 10, 3, 12, tzinfo=UTC)
+            return self.value
 
     class Actions:
         state = SyncScheduleState((SyncTarget("sheet", "log"), 1), frozenset({"one"}))
         calls = 0
+        queries = 0
 
         def schedule_state(self):
+            self.queries += 1
             return self.state
 
         def synchronize(self, cancelled):
@@ -294,9 +298,9 @@ def test_automatic_sync_coalesces_commits_and_stops_on_close(qtbot):
             assert release.wait(2)
             return None
 
-    actions, release = Actions(), threading.Event()
+    actions, release, clock = Actions(), threading.Event(), Clock()
     worker = GoogleSyncController()
-    auto = AutomaticSyncController(actions, worker, SyncSchedule(Clock()))
+    auto = AutomaticSyncController(actions, worker, SyncSchedule(clock))
     qtbot.waitUntil(lambda: actions.calls == 1)
     actions.state = SyncScheduleState(actions.state.binding, frozenset({"two", "three"}))
     auto.poll()
@@ -304,11 +308,24 @@ def test_automatic_sync_coalesces_commits_and_stops_on_close(qtbot):
     assert actions.calls == 1
     release.set()
     qtbot.waitUntil(lambda: not worker.busy)
+    clock.value += timedelta(hours=8)
+    auto.poll()
+    assert actions.calls == 1
+    assert not auto._timer.isActive()
+    queries = actions.queries
+    qtbot.wait(50)
+    assert actions.queries == queries
+
+    auto.work_finished()
+    clock.value += timedelta(seconds=29)
+    auto.poll()
+    assert actions.calls == 1
+    clock.value += timedelta(seconds=1)
     auto.poll()
     qtbot.waitUntil(lambda: actions.calls == 2 and not worker.busy)
-    actions.state = SyncScheduleState(actions.state.binding)
-    auto.poll()
     assert actions.calls == 2
+    assert not auto._timer.isActive()
+    auto.work_finished()
     auto.begin_shutdown()
     auto.poll()
     assert actions.calls == 2
@@ -322,8 +339,10 @@ def test_automatic_sync_obsoletes_inflight_connection_and_retains_new_work(qtbot
     from qi_flow.ui.google_sync_controller import AutomaticSyncController, GoogleSyncController
 
     class Clock:
+        value = datetime(2026, 10, 3, 12, tzinfo=UTC)
+
         def now(self):
-            return datetime(2026, 10, 3, 12, tzinfo=UTC)
+            return self.value
 
     class Actions:
         state = SyncScheduleState((SyncTarget("sheet", "log"), 1), frozenset({"pending"}))
@@ -339,16 +358,20 @@ def test_automatic_sync_obsoletes_inflight_connection_and_retains_new_work(qtbot
                     threading.Event().wait(0.01)
             return None
 
-    actions, worker = Actions(), GoogleSyncController()
+    actions, worker, clock = Actions(), GoogleSyncController(), Clock()
     results = []
     worker.completed.connect(lambda *args: results.append(args))
     worker.failed.connect(lambda *args: results.append(args))
-    auto = AutomaticSyncController(actions, worker, SyncSchedule(Clock()))
+    auto = AutomaticSyncController(actions, worker, SyncSchedule(clock))
     qtbot.waitUntil(lambda: actions.calls == 1)
     actions.state = SyncScheduleState((SyncTarget("new-sheet", "new-log"), 2))
     auto.poll()
     qtbot.waitUntil(lambda: not worker.busy)
     assert results == []
+    auto.poll()
+    assert actions.calls == 1
+    auto.work_finished()
+    clock.value += timedelta(seconds=30)
     auto.poll()
     qtbot.waitUntil(lambda: actions.calls == 2 and not worker.busy)
     assert len(results) == 1

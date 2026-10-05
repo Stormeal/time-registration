@@ -167,7 +167,10 @@ def run(argv: list[str] | None = None) -> int:
     log.info("QI Flow %s started; data directory initialized", __version__)
 
     service = TimeTrackingApplicationService(
-        lambda: SQLiteUnitOfWork(context.database), SystemClock(), UuidIdentifierGenerator()
+        lambda: SQLiteUnitOfWork(context.database),
+        SystemClock(),
+        UuidIdentifierGenerator(),
+        on_work_finished=lambda: automatic_sync.work_finished(),
     )
     backups = BackupManager(
         context.database,

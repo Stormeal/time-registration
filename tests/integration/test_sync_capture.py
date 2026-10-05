@@ -19,6 +19,7 @@ from qi_flow.application.google_sync import GoogleSyncSettings
 from qi_flow.application.sync_models import SyncTarget, validate_group
 from qi_flow.application.testhuset import TesthusetService
 from qi_flow.application.time_tracking import TimeTrackingApplicationService
+from qi_flow.domain.errors import InvalidStateTransitionError
 from qi_flow.domain.models import DeductionKind, WorkLocation
 from qi_flow.domain.testhuset import ProjectTask
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
@@ -67,6 +68,45 @@ def manual(service):
             datetime(2026, 10, 2, 7, tzinfo=UTC), datetime(2026, 10, 2, 14, tzinfo=UTC)
         )
     )
+
+
+def test_only_a_committed_finish_notifies_the_sync_trigger(rig):
+    _, clock, database, factory, _ = rig
+    notifications = []
+
+    def finished():
+        with factory() as uow:
+            assert uow.sessions.get_active() is None
+            assert uow.sync_for(TARGET).pending()
+        notifications.append("finished")
+
+    service = TimeTrackingApplicationService(
+        factory, clock, UuidIdentifierGenerator(), on_work_finished=finished
+    )
+    service.start_work(StartWorkCommand())
+    assert notifications == []
+    clock.value += timedelta(minutes=10)
+    service.start_deduction(StartDeductionCommand(DeductionKind.LUNCH))
+    with pytest.raises(InvalidStateTransitionError, match="End lunch"):
+        service.finish_work(FinishWorkCommand())
+    assert notifications == []
+    clock.value += timedelta(minutes=20)
+    service.finish_deduction(FinishDeductionCommand())
+    assert notifications == []
+
+    with database.transaction() as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_finish BEFORE UPDATE ON work_sessions "
+            "BEGIN SELECT RAISE(ABORT, 'finish failure'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="finish failure"):
+        service.finish_work(FinishWorkCommand())
+    assert notifications == []
+    with database.transaction() as connection:
+        connection.execute("DROP TRIGGER fail_finish")
+
+    service.finish_work(FinishWorkCommand())
+    assert notifications == ["finished"]
 
 
 def test_successive_offline_edits_retain_causal_parents_after_restart(rig):

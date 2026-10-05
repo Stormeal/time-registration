@@ -173,9 +173,14 @@ Existing V1 snapshot publication refuses writes. A separate append-only migratio
 raw V1 data and all declared participants' reviewed snapshots, with verified local safety copies.
 Verified all-participant cutover seeds V2 before enabling ordinary sync. A changed acknowledged
 history requires a fresh reviewed migration; it cannot silently supersede the acknowledgements.
-Opening, newly eligible groups and five-minute checks coalesce on one worker. Retry respects
-backoff, disable/configuration changes cancel obsolete work, and closing preserves the outbox for
-the next opening. Protocol details and limitations are in [google-sync-v2.md](docs/google-sync-v2.md).
+Opening and committed Finish-work notifications request sync through one worker. The tracking
+service invokes its injected Finish callback only after the local/outbox transaction commits.
+One-shot timers preserve 30-second Undo grace and coalesce Finish requests while a Google job is
+running. No recurring eligibility or network timer remains. Failed attempts await another opening,
+Finish or manual Sync now; later automatic requests honor server cooldown. Authorization checks
+run outside eligibility transactions because the credential adapter reads saved client settings.
+Disable/configuration changes invalidate obsolete work, and closing preserves the outbox for the
+next opening. Protocol details and limitations are in [google-sync-v2.md](docs/google-sync-v2.md).
 
 Calendar queries split at Copenhagen midnight and clip work/deductions before aggregation and
 rounding. Editors expose independent endpoint dates and reject missing DST times while allowing

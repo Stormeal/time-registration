@@ -1,4 +1,4 @@
-"""Pure automatic-sync policy; durable eligibility is supplied by application queries."""
+"""One-shot opening/finish requests, with undo grace and server cooldown."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -19,8 +19,7 @@ class SyncSchedule:
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._binding: SyncBinding | None = None
-        self._seen: frozenset[str] = frozenset()
-        self._next_check: datetime | None = None
+        self._requested_at: datetime | None = clock.now()
         self._retry_at: datetime | None = None
         self._failures = 0
         self._closing = False
@@ -28,27 +27,29 @@ class SyncSchedule:
     def _observe(self, state: SyncScheduleState) -> None:
         if self._binding != state.binding:
             self._binding = state.binding
-            self._seen = frozenset()
-            self._next_check = self._retry_at = None
+            self._retry_at = None
             self._failures = 0
 
     def due(self, state: SyncScheduleState, *, busy: bool) -> bool:
         self._observe(state)
-        if self._closing or busy or state.binding is None:
+        if self._closing or busy or state.binding is None or self._requested_at is None:
             return False
         now = self._clock.now()
-        if self._retry_at is not None:
-            return now >= self._retry_at
-        return (
-            self._next_check is None
-            or now >= self._next_check
-            or bool(state.eligible_ids - self._seen)
-        )
+        return now >= self._requested_at and (self._retry_at is None or now >= self._retry_at)
+
+    def work_finished(self) -> None:
+        if not self._closing:
+            self._requested_at = self._clock.now() + timedelta(seconds=30)
+
+    def delay_seconds(self) -> float | None:
+        if self._closing or self._requested_at is None:
+            return None
+        when = max(self._requested_at, self._retry_at or self._requested_at)
+        return max(0.0, (when - self._clock.now()).total_seconds())
 
     def started(self, state: SyncScheduleState) -> None:
         self._observe(state)
-        self._seen = state.eligible_ids
-        self._next_check = self._clock.now() + timedelta(minutes=5)
+        self._requested_at = None
 
     def finished(
         self, binding: SyncBinding | None, *, succeeded: bool, retry_after: float = 0
@@ -59,7 +60,6 @@ class SyncSchedule:
         if succeeded:
             self._failures = 0
             self._retry_at = None
-            self._next_check = now + timedelta(minutes=5)
         else:
             self._failures = min(self._failures + 1, 6)
             delay = max(min(15 * 2 ** (self._failures - 1), 300), retry_after)
@@ -72,8 +72,10 @@ class SyncSchedule:
 
     def close(self) -> None:
         self._closing = True
+        self._requested_at = None
 
     def resume(self) -> None:
         self._closing = False
-        self._next_check = self._retry_at = None
+        self._requested_at = self._clock.now()
+        self._retry_at = None
         self._failures = 0

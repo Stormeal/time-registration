@@ -54,6 +54,10 @@ class GoogleSyncSettings:
                 self._advance_generation(uow, now)
                 uow.settings.save("google_sync_v2_target", None, now)
                 uow.settings.save("google_sync_enabled", False, now)
+            elif uow.settings.get("google_sync_generation") is None:
+                # V1 connections predate generation guards. Persist the same zero
+                # returned by generation() without invalidating an unchanged connection.
+                uow.settings.save("google_sync_generation", 0, now)
             uow.settings.save("google_sync_sheet_url", configuration.sheet_url, now)
             uow.settings.save("google_sync_client_id", configuration.oauth_client_id, now)
         return configuration

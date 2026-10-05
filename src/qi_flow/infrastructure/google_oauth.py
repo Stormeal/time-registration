@@ -240,9 +240,22 @@ class GoogleOAuthStore:
                     kwargs["timeout"] = 15.0
                     return request(*args, **kwargs)
 
-                credentials.refresh(bounded_request)
+                exceptions_module: Any = importlib.import_module("google.auth.exceptions")
+                try:
+                    credentials.refresh(bounded_request)
+                except exceptions_module.RefreshError as error:
+                    if error.retryable:
+                        raise
+                    raise SyncAuthorizationRequiredError(
+                        "Google rejected this computer's saved sign-in. "
+                        "Use Disconnect this computer, save your OAuth client setup again, "
+                        "then use Authorize this computer before retrying. "
+                        "Your saved hours are retained. Review the operation before retrying."
+                    ) from error
                 keyring.set_password(_SERVICE, _TOKEN_ACCOUNT, credentials.to_json())
             return credentials
+        except SyncAuthorizationRequiredError:
+            raise
         except (ImportError, KeyringError, ValueError) as error:
             raise SyncAuthorizationRequiredError(
                 "Google authorization needs to be repeated."

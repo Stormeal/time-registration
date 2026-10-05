@@ -221,6 +221,44 @@ def test_changed_oauth_client_requires_renewed_authorization(rig):
     assert json.loads(values["refresh-token"])["client_id"] == "test.apps.googleusercontent.com"
 
 
+@pytest.mark.parametrize("retryable", [False, True], ids=["rejected", "temporary-failure"])
+def test_refresh_failure_preserves_credentials_and_only_rejection_requires_authorization(
+    rig, monkeypatch, caplog, retryable
+):
+    import google.oauth2.credentials
+    from google.auth.exceptions import RefreshError
+
+    from qi_flow.application.sync_models import SyncAuthorizationRequiredError
+
+    store, _, values, _, _, _ = rig
+    original = json.dumps({"client_id": "test.apps.googleusercontent.com"})
+    values["refresh-token"] = original
+
+    class Credentials:
+        expired = True
+        refresh_token = "synthetic-private-token"
+
+        def refresh(self, request):
+            raise RefreshError("synthetic-private-token", retryable=retryable)
+
+    monkeypatch.setattr(
+        google.oauth2.credentials.Credentials,
+        "from_authorized_user_info",
+        lambda *args: Credentials(),
+    )
+
+    expected_error = RefreshError if retryable else SyncAuthorizationRequiredError
+    with pytest.raises(expected_error) as failure:
+        store.credentials()
+
+    assert values["refresh-token"] == original
+    assert values["desktop-client"] == CLIENT
+    if not retryable:
+        assert "authorize" in str(failure.value).lower()
+        assert "synthetic-private-token" not in str(failure.value)
+    assert "synthetic-private-token" not in caplog.text
+
+
 def test_configured_client_must_match_credential_manager_setup(rig):
     _, _, values, _, _, _ = rig
     values["refresh-token"] = json.dumps({"client_id": "test.apps.googleusercontent.com"})

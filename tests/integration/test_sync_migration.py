@@ -87,7 +87,7 @@ class SharedSheet:
             raise TimeoutError("Accepted seeds, lost response")
 
 
-def machine(tmp_path, name, sheet, local=None):
+def machine(tmp_path, name, sheet, local=None, *, legacy_settings=False):
     module = importlib.import_module("qi_flow.application.sync_migration")
     database = SQLiteDatabase(tmp_path / f"{name}.sqlite3")
     database.initialize()
@@ -99,6 +99,10 @@ def machine(tmp_path, name, sheet, local=None):
         with factory() as uow:
             uow.sessions.add(local)
     settings = GoogleSyncSettings(factory, Clock())
+    if legacy_settings:
+        with factory() as uow:
+            uow.settings.save("google_sync_sheet_url", CONFIG.sheet_url, NOW)
+            uow.settings.save("google_sync_client_id", CONFIG.oauth_client_id, NOW)
     settings.save(CONFIG)
     copies = []
 
@@ -119,6 +123,24 @@ def machine(tmp_path, name, sheet, local=None):
         generation=settings.generation(),
     )
     return factory, migration, copies, settings
+
+
+def test_unchanged_legacy_connection_can_complete_reviewed_migration(tmp_path):
+    sheet = SharedSheet()
+    factory, migration, copies, settings = machine(
+        tmp_path, "main", sheet, work(), legacy_settings=True
+    )
+    plan = migration.begin(("main",), writers_paused=True)
+    migration.contribute("main")
+    migration.complete("main")
+
+    assert migration.status().completed
+    assert settings.active_target() == plan.target
+    assert copies
+    assert sheet.legacy == legacy_rows()
+    with factory() as uow:
+        assert uow.sessions.get(SessionId("work")) == work()
+        assert not uow.sync_for(plan.target).conflicts()
 
 
 def test_cutover_requires_paused_writers_and_every_declared_machine(tmp_path):

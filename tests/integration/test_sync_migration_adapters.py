@@ -1,14 +1,17 @@
 """Real SQLite safety copies and synthetic Sheets requests protect cutover ownership."""
 
 import importlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from qi_flow.application.google_sync import GoogleSyncConfiguration
+from qi_flow.application.google_sync import GoogleSyncConfiguration, GoogleSyncSettings
+from qi_flow.application.sync_actions import GoogleSyncActions
 from qi_flow.application.sync_migration import fingerprint
 from qi_flow.application.sync_models import SyncChange, SyncTarget, finalize_group
+from qi_flow.infrastructure.google_oauth import GoogleOAuthStore
 from qi_flow.infrastructure.google_sheets_sync import GoogleSheetsSync
 from qi_flow.infrastructure.sqlite.database import SQLiteDatabase
 from qi_flow.infrastructure.sqlite.repositories import SQLiteUnitOfWork
@@ -246,3 +249,48 @@ def test_real_migration_safety_copy_is_verified_and_preserves_active_state(tmp_p
     with SQLiteUnitOfWork(SQLiteDatabase(Path(snapshot.backup_reference))) as uow:
         assert uow.sessions.get_active().id == "active"
     assert safety.create_snapshot().backup_reference != snapshot.backup_reference
+
+
+def test_schedule_authorization_can_read_saved_client_without_a_nested_write_lock(
+    tmp_path, monkeypatch
+):
+    database = SQLiteDatabase(tmp_path / "schedule.sqlite3")
+    database.initialize()
+
+    def factory():
+        return SQLiteUnitOfWork(database)
+
+    class Clock:
+        def now(self):
+            return NOW
+
+    settings = GoogleSyncSettings(factory, Clock())
+    settings.save(CONFIG)
+    with factory() as uow:
+        uow.settings.save("google_sync_enabled", True, NOW)
+        uow.settings.save(
+            "google_sync_v2_target", {"spreadsheet_id": "sheet", "log_id": "log"}, NOW
+        )
+        uow.sync_for(TARGET).set_state("migration_complete", True)
+    values = {
+        "refresh-token": json.dumps({"client_id": CONFIG.oauth_client_id}),
+        "desktop-client": json.dumps({"installed": {"client_id": CONFIG.oauth_client_id}}),
+    }
+    monkeypatch.setattr(
+        "qi_flow.infrastructure.google_oauth.keyring.get_password",
+        lambda service, account: values.get(account),
+    )
+    connect = SQLiteDatabase.connect
+
+    def no_lock_wait(database):
+        connection = connect(database)
+        connection.execute("PRAGMA busy_timeout = 0")
+        return connection
+
+    monkeypatch.setattr(SQLiteDatabase, "connect", no_lock_wait)
+    oauth = GoogleOAuthStore(client_id=lambda: settings.load().oauth_client_id)
+    actions = GoogleSyncActions(factory, settings, oauth, Clock(), None, None)
+    expected_binding = (TARGET, settings.generation())
+
+    for _ in range(3):
+        assert actions.schedule_state().binding == expected_binding

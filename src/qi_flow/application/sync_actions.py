@@ -80,9 +80,13 @@ class GoogleSyncActions:
         )
 
     def schedule_state(self) -> SyncScheduleState:
+        # Authorization may load settings through another unit of work. Never
+        # invoke it while holding the transaction used to read sync eligibility.
+        if not self._authorization.is_authorized():
+            return SyncScheduleState(None)
         with self._factory() as uow:
             target = active_target(uow)
-            if target is None or not self._authorization.is_authorized():
+            if target is None:
                 return SyncScheduleState(None)
             value = uow.settings.get("google_sync_generation")
             generation = value if type(value) is int else 0

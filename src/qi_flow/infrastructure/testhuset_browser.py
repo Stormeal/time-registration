@@ -199,15 +199,45 @@ class TesthusetBrowser:
     def read(self, slot: HourSlot) -> str:
         field_id = self._field_id(slot)
         field = self.page.locator(f'input[id="{field_id}"]')
-        if field.count() != 1:
-            raise ValueError("A date/task slot is missing. Check the Testhuset week and layout.")
-        return field.input_value()
+        if field.count() == 1:
+            return field.input_value()
+        if field.count() == 0:
+            readonly = self._readonly_hours(slot)
+            if readonly is not None:
+                return readonly
+        raise ValueError("A date/task slot is missing. Check the Testhuset week and layout.")
+
+    def _readonly_hours(self, slot: HourSlot) -> str | None:
+        # Invoiced/locked days render a number span instead of an input with a date ID.
+        # The selected ISO week and exactly seven day cells establish the date position.
+        row = self.page.locator(f'#idTabelUgeseddel .ws-row-task[id="{slot.task.id}"]')
+        if row.count() != 1:
+            return None
+        days = row.locator("td.ws-form-control-td")
+        if days.count() != 7:
+            return None
+        cell = days.nth(slot.work_date.isoweekday() - 1)
+        value = cell.locator(".ws-form-control-number")
+        if cell.locator("input").count() or value.count() != 1:
+            return None
+        text = value.inner_text().strip()
+        if not text:
+            return None
+        # A dash denotes an unavailable cell, not zero registered hours.
+        parse_hours(text)
+        return text
 
     def write_verified(self, slot: HourSlot) -> None:
         field_id = self._field_id(slot)
         field = self.page.locator(f'input[id="{field_id}"]')
+        if field.count() != 1:
+            if field.count() != 0 or self._readonly_hours(slot) is None:
+                raise ValueError(
+                    "A date/task slot is missing. Check the Testhuset week and layout."
+                )
+            raise ValueError(self._locked_message(slot))
         if not field.is_enabled() or not field.is_editable():
-            raise ValueError("This Testhuset day is locked. No further slots were changed.")
+            raise ValueError(self._locked_message(slot))
         cell = field.locator("xpath=ancestor::td[1]")
         if cell.get_attribute("data-kommentarindstilling") == "1":
             raise ValueError("This task requires a comment. Register it manually in Testhuset.")
@@ -235,6 +265,14 @@ class TesthusetBrowser:
                 "Testhuset accepted a different value. Review the week before retrying."
             )
         expect(field).to_have_value(answer[2])
+
+    @staticmethod
+    def _locked_message(slot: HourSlot) -> str:
+        return (
+            f"Testhuset {slot.work_date:%d/%m/%Y} is locked or invoiced. "
+            "Keep its existing value or contact your Testhuset administrator to correct it. "
+            "No further slots were changed."
+        )
 
 
 @contextmanager

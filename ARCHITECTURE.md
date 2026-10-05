@@ -200,6 +200,12 @@ directly before scanning, expands project rows, validates
 the date/task field identity and verifies `/ajaxupdatetime` responses (`d` success code `1` plus
 the returned accepted value). There is deliberately no close-week port or adapter action.
 
+Invoiced or locked days can render `.ws-form-control-number` values instead of dated inputs.
+The adapter reads these only from a unique task row with exactly seven ordered day cells in
+the verified ISO week. Matching or explicitly kept values remain untouched; replacing one
+stops with a dated locked/invoiced explanation. Unavailable markers and ambiguous layouts
+are never inferred as zero hours.
+
 The composition root injects the service and temporary-browser factory into the UI. A dedicated
 Qt worker owns every Playwright object throughout one scan/fill. The main thread handles the
 preview and choices; an event releases the worker only after explicit confirmation. Cancellation
